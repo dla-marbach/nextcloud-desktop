@@ -341,11 +341,11 @@ QString Theme::gitSHA1() const
 QString Theme::about() const
 {
     QString devString;
-    devString = tr("<p>Version %1. For more information please click <a href='%2'>here</a>.</p>")
+    devString = tr("<p>Version %1-DLA. For more information please click <a href='%2'>here</a>.</p>")
               .arg(MIRALL_VERSION_STRING)
               .arg(helpUrl());
 
-    devString += tr("<p>This release was supplied by %1</p>")
+    devString += tr("<p>This release was supplied by the Nextcloud GmbH and customized by wdv@dla-marbach.de</p>")
               .arg(APPLICATION_VENDOR);
 
     devString += gitSHA1();
