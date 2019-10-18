@@ -214,16 +214,16 @@ void AccountSettings::createAccountToolbox()
     connect(menu, &QMenu::aboutToShow, this, &AccountSettings::slotMenuBeforeShow);
 
     _addAccountAction = new QAction(tr("Add new"), this);
-    menu->addAction(_addAccountAction);
-    connect(_addAccountAction, &QAction::triggered, this, &AccountSettings::slotOpenAccountWizard);
+    //menu->addAction(_addAccountAction);
+    //connect(_addAccountAction, &QAction::triggered, this, &AccountSettings::slotOpenAccountWizard);
 
     _toggleSignInOutAction = new QAction(tr("Log out"), this);
     connect(_toggleSignInOutAction, &QAction::triggered, this, &AccountSettings::slotToggleSignInState);
     menu->addAction(_toggleSignInOutAction);
 
     QAction *action = new QAction(tr("Remove"), this);
-    menu->addAction(action);
-    connect(action, &QAction::triggered, this, &AccountSettings::slotDeleteAccount);
+    //menu->addAction(action);
+    //connect(action, &QAction::triggered, this, &AccountSettings::slotDeleteAccount);
 
     ui->_accountToolbox->setText(tr("Account") + QLatin1Char(' '));
     ui->_accountToolbox->setMenu(menu);
@@ -672,8 +672,8 @@ void AccountSettings::slotCustomContextMenuRequested(const QPoint &pos)
     ac = menu->addAction(folderPaused ? tr("Resume sync") : tr("Pause sync"));
     connect(ac, &QAction::triggered, this, &AccountSettings::slotEnableCurrentFolder);
 
-    ac = menu->addAction(tr("Remove folder sync connection"));
-    connect(ac, &QAction::triggered, this, &AccountSettings::slotRemoveCurrentFolder);
+    //ac = menu->addAction(tr("Remove folder sync connection"));
+    //connect(ac, &QAction::triggered, this, &AccountSettings::slotRemoveCurrentFolder);
     menu->popup(tv->mapToGlobal(pos));
 }
 
