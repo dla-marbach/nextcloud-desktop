@@ -86,11 +86,11 @@ void showEnableE2eeWithVirtualFilesWarningDialog(std::function<void(void)> onAcc
     const auto messageBox = new QMessageBox;
     messageBox->setAttribute(Qt::WA_DeleteOnClose);
     messageBox->setText(AccountSettings::tr("End-to-End Encryption with Virtual Files"));
-    messageBox->setInformativeText(AccountSettings::tr("You seem to have the Virtual Files feature enabled on this folder. At "
-                                                       " the moment, it is not possible to implicitly download virtual files that are "
-                                                       "End-to-End encrypted. To get the best experience with Virtual Files and"
-                                                       " End-to-End Encryption, make sure the encrypted folder is marked with"
-                                                       " \"Make always available locally\"."));
+    messageBox->setInformativeText(AccountSettings::tr("You seem to have the Virtual Files feature enabled on this folder. "
+                                                       "At the moment, it is not possible to implicitly download virtual files that are "
+                                                       "End-to-End encrypted. To get the best experience with Virtual Files and "
+                                                       "End-to-End Encryption, make sure the encrypted folder is marked with "
+                                                       "\"Make always available locally\"."));
     messageBox->setIcon(QMessageBox::Warning);
     const auto dontEncryptButton = messageBox->addButton(QMessageBox::StandardButton::Cancel);
     Q_ASSERT(dontEncryptButton);
@@ -491,8 +491,8 @@ void AccountSettings::slotSubfolderContextMenuRequested(const QModelIndex& index
     ac = menu.addAction(tr("Edit Ignored Files"));
     connect(ac, &QAction::triggered, this, &AccountSettings::slotEditCurrentLocalIgnoredFiles);
 
-    ac = menu.addAction(tr("Create new folder"));
-    connect(ac, &QAction::triggered, this, &AccountSettings::slotOpenMakeFolderDialog);
+    //ac = menu.addAction(tr("Create new folder"));
+    //connect(ac, &QAction::triggered, this, &AccountSettings::slotOpenMakeFolderDialog);
     ac->setEnabled(QFile::exists(fileName));
 
     const auto folder = info->_folder;
@@ -557,8 +557,8 @@ void AccountSettings::slotCustomContextMenuRequested(const QPoint &pos)
     ac = menu->addAction(tr("Edit Ignored Files"));
     connect(ac, &QAction::triggered, this, &AccountSettings::slotEditCurrentIgnoredFiles);
 
-    ac = menu->addAction(tr("Create new folder"));
-    connect(ac, &QAction::triggered, this, &AccountSettings::slotOpenMakeFolderDialog);
+    //ac = menu->addAction(tr("Create new folder"));
+    //connect(ac, &QAction::triggered, this, &AccountSettings::slotOpenMakeFolderDialog);
     ac->setEnabled(QFile::exists(folder->path()));
 
     if (!_ui->_folderList->isExpanded(index) && folder->supportsSelectiveSync()) {
@@ -579,8 +579,8 @@ void AccountSettings::slotCustomContextMenuRequested(const QPoint &pos)
     ac = menu->addAction(folderPaused ? tr("Resume sync") : tr("Pause sync"));
     connect(ac, &QAction::triggered, this, &AccountSettings::slotEnableCurrentFolder);
 
-    ac = menu->addAction(tr("Remove folder sync connection"));
-    connect(ac, &QAction::triggered, this, &AccountSettings::slotRemoveCurrentFolder);
+    //ac = menu->addAction(tr("Remove folder sync connection"));
+    //connect(ac, &QAction::triggered, this, &AccountSettings::slotRemoveCurrentFolder);
 
     if (folder->virtualFilesEnabled()) {
         auto availabilityMenu = menu->addMenu(tr("Availability"));
