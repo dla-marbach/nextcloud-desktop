@@ -15,7 +15,12 @@
 #pragma once
 
 #include "owncloudlib.h"
+#include "common/vfs.h"
+
+#include <QRegularExpression>
+#include <QSharedPointer>
 #include <QString>
+
 #include <chrono>
 
 
@@ -24,8 +29,12 @@ namespace OCC {
 /**
  * Value class containing the options given to the sync engine
  */
-struct SyncOptions
+class OWNCLOUDSYNC_EXPORT SyncOptions
 {
+public:
+    SyncOptions();
+    ~SyncOptions();
+
     /** Maximum size (in Bytes) a folder can have without asking for confirmation.
      * -1 means infinite */
     qint64 _newBigFolderSizeLimit = -1;
@@ -36,6 +45,9 @@ struct SyncOptions
     /** If remotely deleted files are needed to move to trash */
     bool _moveFilesToTrash = false;
 
+    /** Create a virtual file for new files instead of downloading. May not be null */
+    QSharedPointer<Vfs> _vfs;
+
     /** The initial un-adjusted chunk size in bytes for chunked uploads, both
      * for old and new chunking algorithm, which classifies the item to be chunked
      *
@@ -43,13 +55,13 @@ struct SyncOptions
      * starting value and is then gradually adjusted within the
      * minChunkSize / maxChunkSize bounds.
      */
-    quint64 _initialChunkSize = 10 * 1000 * 1000; // 10MB
+    qint64 _initialChunkSize = 10 * 1000 * 1000; // 10MB
 
     /** The minimum chunk size in bytes for chunked uploads */
-    quint64 _minChunkSize = 1 * 1000 * 1000; // 1MB
+    qint64 _minChunkSize = 1 * 1000 * 1000; // 1MB
 
     /** The maximum chunk size in bytes for chunked uploads */
-    quint64 _maxChunkSize = 100 * 1000 * 1000; // 100MB
+    qint64 _maxChunkSize = 1000 * 1000 * 1000; // 1000MB
 
     /** The target duration of chunk uploads for dynamic chunk sizing.
      *
@@ -57,9 +69,47 @@ struct SyncOptions
      */
     std::chrono::milliseconds _targetChunkUploadDuration = std::chrono::minutes(1);
 
-    /** Whether parallel network jobs are allowed. */
-    bool _parallelNetworkJobs = true;
-};
+    /** The maximum number of active jobs in parallel  */
+    int _parallelNetworkJobs = 6;
 
+    /** Reads settings from env vars where available.
+     *
+     * Currently reads _initialChunkSize, _minChunkSize, _maxChunkSize,
+     * _targetChunkUploadDuration, _parallelNetworkJobs.
+     */
+    void fillFromEnvironmentVariables();
+
+    /** Ensure min <= initial <= max
+     *
+     * Previously min/max chunk size values didn't exist, so users might
+     * have setups where the chunk size exceeds the new min/max default
+     * values. To cope with this, adjust min/max to always include the
+     * initial chunk size value.
+     */
+    void verifyChunkSizes();
+
+
+    /** A regular expression to match file names
+     * If no pattern is provided the default is an invalid regular expression.
+     */
+    QRegularExpression fileRegex() const;
+
+    /**
+     * A pattern like *.txt, matching only file names
+     */
+    void setFilePattern(const QString &pattern);
+
+    /**
+     * A pattern like /own.*\/.*txt matching the full path
+     */
+    void setPathPattern(const QString &pattern);
+
+private:
+    /**
+     * Only sync files that mathc the expression
+     * Invalid pattern by default.
+     */
+    QRegularExpression _fileRegex = QRegularExpression(QStringLiteral("("));
+};
 
 }

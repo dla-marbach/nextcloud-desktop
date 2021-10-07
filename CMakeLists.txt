@@ -1,16 +1,19 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.6)
 set(CMAKE_CXX_STANDARD 14)
 
 project(client)
 
+include(FeatureSummary)
+
 set(BIN_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-set(OEM_THEME_DIR "" CACHE STRING "Define directory containing a custom theme")
-if ( EXISTS ${OEM_THEME_DIR}/OEM.cmake )
-     include ( ${OEM_THEME_DIR}/OEM.cmake )
-else ()
-     include ( ${CMAKE_SOURCE_DIR}/NEXTCLOUD.cmake )
+include(${CMAKE_SOURCE_DIR}/NEXTCLOUD.cmake)
+
+# Default suffix if the theme doesn't define one
+if(NOT DEFINED APPLICATION_VIRTUALFILE_SUFFIX)
+    set(APPLICATION_VIRTUALFILE_SUFFIX "${APPLICATION_SHORTNAME}_virtual" CACHE STRING "Virtual file suffix (not including the .)")
 endif()
+
 # need this logic to not mess with re/uninstallations via macosx.pkgproj
 if(${APPLICATION_REV_DOMAIN} STREQUAL "com.owncloud.desktopclient")
     set(APPLICATION_REV_DOMAIN_INSTALLER "com.ownCloud.client")
@@ -33,11 +36,19 @@ endif()
 
 set( CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules )
 
+include(ECMCoverageOption)
+
 if(NOT CRASHREPORTER_EXECUTABLE)
     set(CRASHREPORTER_EXECUTABLE "${APPLICATION_EXECUTABLE}_crash_reporter")
 endif()
 
 include(Warnings)
+
+if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+  add_compile_options(-fdiagnostics-color=always)
+elseif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+  add_compile_options(-fcolor-diagnostics)
+endif()
 
 include(${CMAKE_SOURCE_DIR}/VERSION.cmake)
 # For config.h
@@ -66,9 +77,9 @@ include(GetGitRevisionDescription)
 get_git_head_revision(GIT_REFSPEC GIT_SHA1)
 
 add_definitions(
+    -DQT_DISABLE_DEPRECATED_BEFORE=0x000000
     -DQT_USE_QSTRINGBUILDER
     -DQT_MESSAGELOGCONTEXT #enable function name and line number in debug output
-    -DQT_DEPRECATED_WARNINGS
 )
 
 # if we cannot get it from git, directly try .tag (packages)
@@ -85,20 +96,16 @@ endif()
 message(STATUS "GIT_SHA1 ${GIT_SHA1}")
 
 set(SYSCONFDIR ${SYSCONF_INSTALL_DIR})
-set(DATADIR ${DATA_INSTALL_DIR})
-if(WIN32)
-set(DATADIR "share")
-endif(WIN32)
-set(SHAREDIR ${DATADIR})
+set(SHAREDIR ${CMAKE_INSTALL_DATADIR})
 
 #####
 ## handle BUILD_OWNCLOUD_OSX_BUNDLE
 # BUILD_OWNCLOUD_OSX_BUNDLE was not initialized OR set to true on OSX
 if(APPLE AND (NOT DEFINED BUILD_OWNCLOUD_OSX_BUNDLE OR BUILD_OWNCLOUD_OSX_BUNDLE))
     set(BUILD_OWNCLOUD_OSX_BUNDLE ON)
-    set(OWNCLOUD_OSX_BUNDLE "${APPLICATION_EXECUTABLE}.app")
-    set(LIB_INSTALL_DIR "${APPLICATION_EXECUTABLE}.app/Contents/MacOS")
-    set(BIN_INSTALL_DIR "${APPLICATION_EXECUTABLE}.app/Contents/MacOS")
+    set(OWNCLOUD_OSX_BUNDLE "${APPLICATION_NAME}.app")
+    set(LIB_INSTALL_DIR "${APPLICATION_NAME}.app/Contents/MacOS")
+    set(BIN_INSTALL_DIR "${APPLICATION_NAME}.app/Contents/MacOS")
 
 # BUILD_OWNCLOUD_OSX_BUNDLE was disabled on OSX
 elseif(APPLE AND NOT BUILD_OWNCLOUD_OSX_BUNDLE)
@@ -123,6 +130,15 @@ if(NO_MSG_HANDLER)
    add_definitions(-DNO_MSG_HANDLER=1)
 endif()
 
+# this option builds the updater
+option(BUILD_UPDATER "BUILD_UPDATER" OFF)
+if(BUILD_UPDATER)
+   message("Compiling with updater")
+   add_definitions(-DBUILD_UPDATER=1)
+else()
+   message("Compiling without updater")
+endif()
+
 # this option builds the shell integration
 option(BUILD_SHELL_INTEGRATION "BUILD_SHELL_INTEGRATION" ON)
 
@@ -141,6 +157,9 @@ option(BUILD_CLIENT "BUILD_CLIENT" ON)
 # this option creates only libocsync and libowncloudsync (NOTE: BUILD_CLIENT needs to be on)
 option(BUILD_LIBRARIES_ONLY "BUILD_LIBRARIES_ONLY" OFF)
 
+# build the GUI component, when disabled only nextcloudcmd is built
+option(BUILD_GUI "BUILD_GUI" ON)
+
 # When this option is enabled, 5xx errors are not added to the blacklist
 # Normally you don't want to enable this option because if a particular file
 # triggers a bug on the server, you want the file to be blacklisted.
@@ -149,46 +168,35 @@ if(OWNCLOUD_5XX_NO_BLACKLIST)
     add_definitions(-DOWNCLOUD_5XX_NO_BLACKLIST=1)
 endif()
 
-# When this option is enabled, a rename that is not allowed will be renamed back
-# do the original as a restoration step.  Withut this option, the restoration will
-# re-download the file instead.
-# The default is off because we don't want to rename the files back behind the user's back
-# Added for IL issue #550
-option(OWNCLOUD_RESTORE_RENAME "OWNCLOUD_RESTORE_RENAME" OFF)
-if(OWNCLOUD_RESTORE_RENAME)
-    add_definitions(-DOWNCLOUD_RESTORE_RENAME=1)
-endif()
-
-# Disable shibboleth.
-# So the client can be built without QtWebKit
-option(NO_SHIBBOLETH "Build without Shibboleth support. Allow to build the client without QtWebKit" OFF)
-if(NO_SHIBBOLETH)
-   message("Compiling without shibboleth")
-   add_definitions(-DNO_SHIBBOLETH=1)
-endif()
-
 if(APPLE)
   set( SOCKETAPI_TEAM_IDENTIFIER_PREFIX "" CACHE STRING "SocketApi prefix (including a following dot) that must match the codesign key's TeamIdentifier/Organizational Unit" )
 endif()
 
 if(BUILD_CLIENT)
-    if(APPLE)
-        find_package(Sparkle)
-    endif(APPLE)
+    OPTION(GUI_TESTING "Build with gui introspection features of socket api" OFF)
 
-    if(UNIX)
-        find_package(INotify REQUIRED)
-    else()
-        find_package(INotify)
+    if(APPLE AND BUILD_UPDATER)
+        find_package(Sparkle)
+    endif()
+
+    if(UNIX AND NOT APPLE)
+        find_package(Inotify REQUIRED)
     endif()
     find_package(Sphinx)
     find_package(PdfLatex)
     find_package(OpenSSL 1.1 REQUIRED )
 
    find_package(ZLIB REQUIRED)
-   find_package(GLib2)
-   find_package(Gio)
-   find_package(Libcloudproviders)
+
+   if(NOT WIN32 AND NOT APPLE)
+      find_package(PkgConfig REQUIRED)
+      pkg_check_modules(CLOUDPROVIDERS cloudproviders IMPORTED_TARGET)
+
+      if(CLOUDPROVIDERS_FOUND)
+        pkg_check_modules(GIO REQUIRED gio-2.0 IMPORTED_TARGET)
+        pkg_check_modules(GLIB2 REQUIRED glib-2.0 IMPORTED_TARGET)
+      endif()
+   endif()
 endif()
 
 if (NOT DEFINED APPLICATION_ICON_NAME)
@@ -203,8 +211,17 @@ if( WIN32 )
 add_definitions( -D__USE_MINGW_ANSI_STDIO=1 )
 add_definitions( -DNOMINMAX )
 # Get APIs from from Vista onwards.
-add_definitions( -D_WIN32_WINNT=0x0600)
-add_definitions( -DWINVER=0x0600)
+add_definitions(-D_WIN32_WINNT=0x0601)
+add_definitions(-DWINVER=0x0601)
+add_definitions(-DNTDDI_VERSION=0x0A000004)
+    if( MSVC )
+    # Use automatic overload for suitable CRT safe-functions
+    # See https://docs.microsoft.com/de-de/cpp/c-runtime-library/security-features-in-the-crt?view=vs-2019
+    add_definitions( -D_CRT_SECURE_CPP_OVERLOAD_STANDARD_NAMES=1 )
+    # Also: Disable compiler warnings because we don't use Windows CRT safe-functions explicitly and don't intend to
+    # as this is a pure cross-platform source the only alternative would be a ton of ifdefs with calls to the _s version
+    add_definitions( -D_CRT_SECURE_NO_WARNINGS )
+    endif( MSVC )
 endif( WIN32 )
 
 if (APPLE)
@@ -231,11 +248,11 @@ if(BUILD_SHELL_INTEGRATION)
     add_subdirectory(shell_integration)
 endif()
 
-if(UNIT_TESTING)
+if(BUILD_TESTING)
     include(CTest)
     enable_testing()
     add_subdirectory(test)
-endif(UNIT_TESTING)
+endif()
 
 configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)
 configure_file(version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
@@ -247,3 +264,5 @@ elseif(BUILD_CLIENT)
     install( FILES sync-exclude.lst DESTINATION ${SYSCONFDIR}/${APPLICATION_SHORTNAME} )
     configure_file(sync-exclude.lst bin/sync-exclude.lst COPYONLY)
 endif()
+
+feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES INCLUDE_QUIET_PACKAGES)

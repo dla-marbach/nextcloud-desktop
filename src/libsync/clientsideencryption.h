@@ -23,26 +23,27 @@ class ReadPasswordJob;
 
 namespace OCC {
 
-QString baseUrl();
+QString e2eeBaseUrl();
 
 namespace EncryptionHelper {
     QByteArray generateRandomFilename();
-    QByteArray generateRandom(int size);
+    OWNCLOUDSYNC_EXPORT QByteArray generateRandom(int size);
     QByteArray generatePassword(const QString &wordlist, const QByteArray& salt);
-    QByteArray encryptPrivateKey(
+    OWNCLOUDSYNC_EXPORT QByteArray encryptPrivateKey(
             const QByteArray& key,
             const QByteArray& privateKey,
             const QByteArray &salt
     );
-    QByteArray decryptPrivateKey(
+    OWNCLOUDSYNC_EXPORT QByteArray decryptPrivateKey(
             const QByteArray& key,
             const QByteArray& data
     );
-    QByteArray encryptStringSymmetric(
+    OWNCLOUDSYNC_EXPORT QByteArray extractPrivateKeySalt(const QByteArray &data);
+    OWNCLOUDSYNC_EXPORT QByteArray encryptStringSymmetric(
             const QByteArray& key,
             const QByteArray& data
     );
-    QByteArray decryptStringSymmetric(
+    OWNCLOUDSYNC_EXPORT QByteArray decryptStringSymmetric(
             const QByteArray& key,
             const QByteArray& data
     );
@@ -59,33 +60,72 @@ namespace EncryptionHelper {
             const QByteArray& data
     );
 
-    bool fileEncryption(const QByteArray &key, const QByteArray &iv,
+    OWNCLOUDSYNC_EXPORT bool fileEncryption(const QByteArray &key, const QByteArray &iv,
                       QFile *input, QFile *output, QByteArray& returnTag);
 
-    bool fileDecryption(const QByteArray &key, const QByteArray& iv,
+    OWNCLOUDSYNC_EXPORT bool fileDecryption(const QByteArray &key, const QByteArray &iv,
                                QFile *input, QFile *output);
+
+//
+// Simple classes for safe (RAII) handling of OpenSSL
+// data structures
+//
+class CipherCtx {
+public:
+    CipherCtx() : _ctx(EVP_CIPHER_CTX_new())
+    {
+    }
+
+    ~CipherCtx()
+    {
+        EVP_CIPHER_CTX_free(_ctx);
+    }
+
+    operator EVP_CIPHER_CTX*()
+    {
+        return _ctx;
+    }
+
+private:
+    Q_DISABLE_COPY(CipherCtx)
+    EVP_CIPHER_CTX *_ctx;
+};
+
+class OWNCLOUDSYNC_EXPORT StreamingDecryptor
+{
+public:
+    StreamingDecryptor(const QByteArray &key, const QByteArray &iv, quint64 totalSize);
+    ~StreamingDecryptor() = default;
+
+    QByteArray chunkDecryption(const char *input, quint64 chunkSize);
+
+    bool isInitialized() const;
+    bool isFinished() const;
+
+private:
+    Q_DISABLE_COPY(StreamingDecryptor)
+
+    CipherCtx _ctx;
+    bool _isInitialized = false;
+    bool _isFinished = false;
+    quint64 _decryptedSoFar = 0;
+    quint64 _totalSize = 0;
+};
 }
 
 class OWNCLOUDSYNC_EXPORT ClientSideEncryption : public QObject {
     Q_OBJECT
 public:
     ClientSideEncryption();
-    void initialize();
-    void setAccount(AccountPtr account);
-    bool hasPrivateKey() const;
-    bool hasPublicKey() const;
-    void generateKeyPair();
-    void generateCSR(EVP_PKEY *keyPair);
-    void encryptPrivateKey();
-    void setTokenForFolder(const QByteArray& folder, const QByteArray& token);
-    QByteArray tokenForFolder(const QByteArray& folder) const;
-    void fetchFolderEncryptedStatus();
+    void initialize(const AccountPtr &account);
 
-    // to be used together with FolderStatusModel::FolderInfo::_path.
-    bool isFolderEncrypted(const QString& path) const;
-    void setFolderEncryptedStatus(const QString& path, bool status);
+private:
+    void generateKeyPair(const AccountPtr &account);
+    void generateCSR(const AccountPtr &account, EVP_PKEY *keyPair);
+    void encryptPrivateKey(const AccountPtr &account);
 
-    void forgetSensitiveData();
+public:
+    void forgetSensitiveData(const AccountPtr &account);
 
     bool newMnemonicGenerated() const;
 
@@ -93,9 +133,6 @@ public slots:
     void slotRequestMnemonic();
 
 private slots:
-    void folderEncryptedStatusFetched(const QMap<QString, bool> &values);
-    void folderEncryptedStatusError(int error);
-
     void publicKeyFetched(QKeychain::Job *incoming);
     void privateKeyFetched(QKeychain::Job *incoming);
     void mnemonicKeyFetched(QKeychain::Job *incoming);
@@ -106,22 +143,20 @@ signals:
     void showMnemonic(const QString& mnemonic);
 
 private:
-    void getPrivateKeyFromServer();
-    void getPublicKeyFromServer();
-    void decryptPrivateKey(const QByteArray &key);
+    void getPrivateKeyFromServer(const AccountPtr &account);
+    void getPublicKeyFromServer(const AccountPtr &account);
+    void fetchAndValidatePublicKeyFromServer(const AccountPtr &account);
+    void decryptPrivateKey(const AccountPtr &account, const QByteArray &key);
 
-    void fetchFromKeyChain();
+    void fetchFromKeyChain(const AccountPtr &account);
 
-    void writePrivateKey();
-    void writeCertificate();
-    void writeMnemonic();
+    bool checkPublicKeyValidity(const AccountPtr &account) const;
+    bool checkServerPublicKeyValidity(const QByteArray &serverPublicKeyString) const;
+    void writePrivateKey(const AccountPtr &account);
+    void writeCertificate(const AccountPtr &account);
+    void writeMnemonic(const AccountPtr &account);
 
-    AccountPtr _account;
     bool isInitialized = false;
-    bool _refreshingEncryptionStatus = false;
-    //TODO: Save this on disk.
-    QMap<QByteArray, QByteArray> _folder2token;
-    QMap<QString, bool> _folder2encryptedStatus;
 
 public:
     //QSslKey _privateKey;
@@ -150,6 +185,7 @@ public:
     QByteArray encryptedMetadata();
     void addEncryptedFile(const EncryptedFile& f);
     void removeEncryptedFile(const EncryptedFile& f);
+    void removeAllEncryptedFiles();
     QVector<EncryptedFile> files() const;
 
 

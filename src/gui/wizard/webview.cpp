@@ -4,6 +4,9 @@
 #include <QWebEngineProfile>
 #include <QWebEngineUrlRequestInterceptor>
 #include <QWebEngineUrlRequestJob>
+#if QT_VERSION >= 0x051200
+#include <QWebEngineUrlScheme>
+#endif
 #include <QWebEngineUrlSchemeHandler>
 #include <QWebEngineView>
 #include <QDesktopServices>
@@ -13,11 +16,12 @@
 #include <QWebEngineCertificateError>
 #include <QMessageBox>
 
+#include "guiutility.h"
 #include "common/utility.h"
 
 namespace OCC {
 
-Q_LOGGING_CATEGORY(lcWizardWebiew, "gui.wizard.webview", QtInfoMsg)
+Q_LOGGING_CATEGORY(lcWizardWebiew, "nextcloud.gui.wizard.webview", QtInfoMsg)
 
 
 class WebViewPageUrlRequestInterceptor : public QWebEngineUrlRequestInterceptor
@@ -40,6 +44,7 @@ Q_SIGNALS:
 };
 
 class WebEnginePage : public QWebEnginePage {
+    Q_OBJECT
 public:
     WebEnginePage(QWebEngineProfile *profile, QObject* parent = nullptr);
     QWebEnginePage * createWindow(QWebEnginePage::WebWindowType type) override;
@@ -48,13 +53,16 @@ public:
 protected:
     bool certificateError(const QWebEngineCertificateError &certificateError) override;
 
+    bool acceptNavigationRequest(const QUrl &url, QWebEnginePage::NavigationType type, bool isMainFrame) override;
+
 private:
-    QUrl _rootUrl;
+    bool _enforceHttps = false;
 };
 
 // We need a separate class here, since we cannot simply return the same WebEnginePage object
 // this leads to a strage segfault somewhere deep inside of the QWebEngine code
 class ExternalWebEnginePage : public QWebEnginePage {
+    Q_OBJECT
 public:
     ExternalWebEnginePage(QWebEngineProfile *profile, QObject* parent = nullptr);
     bool acceptNavigationRequest(const QUrl &url, QWebEnginePage::NavigationType type, bool isMainFrame) override;
@@ -65,7 +73,10 @@ WebView::WebView(QWidget *parent)
       _ui()
 {
     _ui.setupUi(this);
-
+#if QT_VERSION >= 0x051200
+    QWebEngineUrlScheme _ncsheme("nc");
+    QWebEngineUrlScheme::registerScheme(_ncsheme);
+#endif
     _webview = new QWebEngineView(this);
     _profile = new QWebEngineProfile(this);
     _page = new WebEnginePage(_profile);
@@ -136,8 +147,8 @@ WebViewPageUrlSchemeHandler::WebViewPageUrlSchemeHandler(QObject *parent)
 void WebViewPageUrlSchemeHandler::requestStarted(QWebEngineUrlRequestJob *request) {
     QUrl url = request->requestUrl();
 
-    QString path = url.path(0).mid(1); // get undecoded path
-    QStringList parts = path.split("&");
+    QString path = url.path().mid(1); // get undecoded path
+    const QStringList parts = path.split("&");
 
     QString server;
     QString user;
@@ -175,21 +186,19 @@ WebEnginePage::WebEnginePage(QWebEngineProfile *profile, QObject* parent) : QWeb
 }
 
 QWebEnginePage * WebEnginePage::createWindow(QWebEnginePage::WebWindowType type) {
-    ExternalWebEnginePage *view = new ExternalWebEnginePage(this->profile());
+    Q_UNUSED(type);
+    auto *view = new ExternalWebEnginePage(this->profile());
     return view;
 }
 
-void WebEnginePage::setUrl(const QUrl &url) {
+void WebEnginePage::setUrl(const QUrl &url)
+{
     QWebEnginePage::setUrl(url);
-    _rootUrl = url;
+    _enforceHttps = url.scheme() == QStringLiteral("https");
 }
 
-bool WebEnginePage::certificateError(const QWebEngineCertificateError &certificateError) {
-    if (certificateError.error() == QWebEngineCertificateError::CertificateAuthorityInvalid &&
-        certificateError.url().host() == _rootUrl.host()) {
-        return true;
-    }
-
+bool WebEnginePage::certificateError(const QWebEngineCertificateError &certificateError)
+{
     /**
      * TODO properly improve this.
      * The certificate should be displayed.
@@ -209,6 +218,18 @@ bool WebEnginePage::certificateError(const QWebEngineCertificateError &certifica
     return ret == QMessageBox::Yes;
 }
 
+bool WebEnginePage::acceptNavigationRequest(const QUrl &url, QWebEnginePage::NavigationType type, bool isMainFrame)
+{
+    Q_UNUSED(type);
+    Q_UNUSED(isMainFrame);
+
+    if (_enforceHttps && url.scheme() != QStringLiteral("https") && url.scheme() != QStringLiteral("nc")) {
+        QMessageBox::warning(nullptr, "Security warning", "Can not follow non https link on a https website. This might be a security issue. Please contact your administrator");
+        return false;
+    }
+    return true;
+}
+
 ExternalWebEnginePage::ExternalWebEnginePage(QWebEngineProfile *profile, QObject* parent) : QWebEnginePage(profile, parent) {
 
 }
@@ -216,7 +237,9 @@ ExternalWebEnginePage::ExternalWebEnginePage(QWebEngineProfile *profile, QObject
 
 bool ExternalWebEnginePage::acceptNavigationRequest(const QUrl &url, QWebEnginePage::NavigationType type, bool isMainFrame)
 {
-    QDesktopServices::openUrl(url);
+    Q_UNUSED(type);
+    Q_UNUSED(isMainFrame);
+    Utility::openBrowser(url);
     return false;
 }
 

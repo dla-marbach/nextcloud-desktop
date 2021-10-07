@@ -27,16 +27,22 @@
 #include "folderman.h"
 #include "logger.h"
 #include "configfile.h"
-#include "socketapi.h"
+#include "socketapi/socketapi.h"
 #include "sslerrordialog.h"
 #include "theme.h"
 #include "clientproxy.h"
 #include "sharedialog.h"
 #include "accountmanager.h"
 #include "creds/abstractcredentials.h"
+
+#if defined(BUILD_UPDATER)
 #include "updater/ocupdater.h"
+#endif
+
 #include "owncloudsetupwizard.h"
 #include "version.h"
+#include "csync_exclude.h"
+#include "common/vfs.h"
 
 #include "config.h"
 
@@ -52,6 +58,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QDesktopServices>
+#include <QGuiApplication>
 
 class QSocket;
 
@@ -63,8 +70,10 @@ namespace {
 
     static const char optionsC[] =
         "Options:\n"
-        "  -h --help            : show this help screen.\n"
-        "  --logwindow          : open a window to show log output.\n"
+        "  --help, -h           : show this help screen.\n"
+        "  --version, -v        : show version information.\n"
+        "  -q --quit            : quit the running instance\n"
+        "  --logwindow, -l      : open a window to show log output.\n"
         "  --logfile <filename> : write log output to file <filename>.\n"
         "  --logdir <name>      : write each sync log output in a new file\n"
         "                         in folder <name>.\n"
@@ -95,6 +104,71 @@ namespace {
 
 // ----------------------------------------------------------------------------------
 
+bool Application::configVersionMigration()
+{
+    QStringList deleteKeys, ignoreKeys;
+    AccountManager::backwardMigrationSettingsKeys(&deleteKeys, &ignoreKeys);
+    FolderMan::backwardMigrationSettingsKeys(&deleteKeys, &ignoreKeys);
+
+    ConfigFile configFile;
+
+    // Did the client version change?
+    // (The client version is adjusted further down)
+    bool versionChanged = configFile.clientVersionString() != MIRALL_VERSION_STRING;
+
+    // We want to message the user either for destructive changes,
+    // or if we're ignoring something and the client version changed.
+    bool warningMessage = !deleteKeys.isEmpty() || (!ignoreKeys.isEmpty() && versionChanged);
+
+    if (!versionChanged && !warningMessage)
+        return true;
+
+    const auto backupFile = configFile.backup();
+
+    if (warningMessage) {
+        QString boldMessage;
+        if (!deleteKeys.isEmpty()) {
+            boldMessage = tr("Continuing will mean <b>deleting these settings</b>.");
+        } else {
+            boldMessage = tr("Continuing will mean <b>ignoring these settings</b>.");
+        }
+
+        QMessageBox box(
+            QMessageBox::Warning,
+            APPLICATION_SHORTNAME,
+            tr("Some settings were configured in newer versions of this client and "
+               "use features that are not available in this version.<br>"
+               "<br>"
+               "%1<br>"
+               "<br>"
+               "The current configuration file was already backed up to <i>%2</i>.")
+                .arg(boldMessage, backupFile));
+        box.addButton(tr("Quit"), QMessageBox::AcceptRole);
+        auto continueBtn = box.addButton(tr("Continue"), QMessageBox::DestructiveRole);
+
+        box.exec();
+        if (box.clickedButton() != continueBtn) {
+            QTimer::singleShot(0, qApp, SLOT(quit()));
+            return false;
+        }
+
+        auto settings = ConfigFile::settingsWithGroup("foo");
+        settings->endGroup();
+
+        // Wipe confusing keys from the future, ignore the others
+        for (const auto &badKey : deleteKeys)
+            settings->remove(badKey);
+    }
+
+    configFile.setClientVersionString(MIRALL_VERSION_STRING);
+    return true;
+}
+
+ownCloudGui *Application::gui() const
+{
+    return _gui;
+}
+
 Application::Application(int &argc, char **argv)
     : SharedTools::QtSingleApplication(Theme::instance()->appName(), argc, argv)
     , _gui(nullptr)
@@ -122,13 +196,19 @@ Application::Application(int &argc, char **argv)
     // TODO: Can't set this without breaking current config paths
     //    setOrganizationName(QLatin1String(APPLICATION_VENDOR));
     setOrganizationDomain(QLatin1String(APPLICATION_REV_DOMAIN));
+
+    // setDesktopFilename to provide wayland compatibility (in general: conformance with naming standards)
+    // but only on Qt >= 5.7, where setDesktopFilename was introduced
+#if (QT_VERSION >= 0x050700)
+    QString desktopFileName = QString(QLatin1String(LINUX_APPLICATION_ID)
+                                        + QLatin1String(".desktop"));
+    setDesktopFileName(desktopFileName);
+#endif
+
     setApplicationName(_theme->appName());
     setWindowIcon(_theme->applicationIcon());
-    setAttribute(Qt::AA_UseHighDpiPixmaps, true);
 
-    auto confDir = ConfigFile().configPath();
-    if (confDir.endsWith('/')) confDir.chop(1);  // macOS 10.11.x does not like trailing slash for rename/move.
-    if (!QFileInfo(confDir).isDir()) {
+    if (!ConfigFile().exists()) {
         // Migrate from version <= 2.4
         setApplicationName(_theme->appNameGUI());
 #ifndef QT_WARNING_DISABLE_DEPRECATED // Was added in Qt 5.9
@@ -143,9 +223,23 @@ Application::Application(int &argc, char **argv)
         QT_WARNING_POP
         setApplicationName(_theme->appName());
         if (QFileInfo(oldDir).isDir()) {
+            auto confDir = ConfigFile().configPath();
+            if (confDir.endsWith('/')) confDir.chop(1);  // macOS 10.11.x does not like trailing slash for rename/move.
             qCInfo(lcApplication) << "Migrating old config from" << oldDir << "to" << confDir;
+
             if (!QFile::rename(oldDir, confDir)) {
-                qCWarning(lcApplication) << "Failed to move the old config file to its new location (" << oldDir << "to" << confDir << ")";
+                qCWarning(lcApplication) << "Failed to move the old config directory to its new location (" << oldDir << "to" << confDir << ")";
+
+                // Try to move the files one by one
+                if (QFileInfo(confDir).isDir() || QDir().mkdir(confDir)) {
+                    const QStringList filesList = QDir(oldDir).entryList(QDir::Files);
+                    qCInfo(lcApplication) << "Will move the individual files" << filesList;
+                    for (const auto &name : filesList) {
+                        if (!QFile::rename(oldDir + "/" + name,  confDir + "/" + name)) {
+                            qCWarning(lcApplication) << "Fallback move of " << name << "also failed";
+                        }
+                    }
+                }
             } else {
 #ifndef Q_OS_WIN
                 // Create a symbolic link so a downgrade of the client would still find the config.
@@ -160,21 +254,46 @@ Application::Application(int &argc, char **argv)
     if (_helpOnly || _versionOnly)
         return;
 
+    if (_quitInstance) {
+        QTimer::singleShot(0, qApp, &QApplication::quit);
+        return;
+    }
+
     if (isRunning())
         return;
 
 #if defined(WITH_CRASHREPORTER)
-    if (ConfigFile().crashReporter())
-        _crashHandler.reset(new CrashReporter::Handler(QDir::tempPath(), true, CRASHREPORTER_EXECUTABLE));
+    if (ConfigFile().crashReporter()) {
+        auto reporter = QStringLiteral(CRASHREPORTER_EXECUTABLE);
+#ifdef Q_OS_WIN
+        if (!reporter.endsWith(QLatin1String(".exe"))) {
+            reporter.append(QLatin1String(".exe"));
+        }
+#endif
+        _crashHandler.reset(new CrashReporter::Handler(QDir::tempPath(), true, reporter));
+    }
 #endif
 
     setupLogging();
     setupTranslations();
 
-    // The timeout is initialized with an environment variable, if not, override with the value from the config
+    if (!configVersionMigration()) {
+        return;
+    }
+
     ConfigFile cfg;
+    // The timeout is initialized with an environment variable, if not, override with the value from the config
     if (!AbstractNetworkJob::httpTimeout)
         AbstractNetworkJob::httpTimeout = cfg.timeout();
+
+    // Check vfs plugins
+    if (Theme::instance()->showVirtualFilesOption() && bestAvailableVfsMode() == Vfs::Off) {
+        qCWarning(lcApplication) << "Theme wants to show vfs mode, but no vfs plugins are available";
+    }
+    if (isVfsPluginAvailable(Vfs::WindowsCfApi))
+        qCInfo(lcApplication) << "VFS windows plugin is available";
+    if (isVfsPluginAvailable(Vfs::WithSuffix))
+        qCInfo(lcApplication) << "VFS suffix plugin is available";
 
     _folderManager.reset(new FolderMan);
 
@@ -219,19 +338,19 @@ Application::Application(int &argc, char **argv)
     FolderMan::instance()->setupFolders();
     _proxy.setupQtProxyFromConfig(); // folders have to be defined first, than we set up the Qt proxy.
 
-    // Enable word wrapping of QInputDialog (#4197)
-    setStyleSheet("QInputDialog QLabel { qproperty-wordWrap:1; }");
-
     connect(AccountManager::instance(), &AccountManager::accountAdded,
         this, &Application::slotAccountStateAdded);
     connect(AccountManager::instance(), &AccountManager::accountRemoved,
         this, &Application::slotAccountStateRemoved);
-    foreach (auto ai, AccountManager::instance()->accounts()) {
+    for (const auto &ai : AccountManager::instance()->accounts()) {
         slotAccountStateAdded(ai.data());
     }
 
     connect(FolderMan::instance()->socketApi(), &SocketApi::shareCommandReceived,
         _gui.data(), &ownCloudGui::slotShowShareDialog);
+
+    connect(FolderMan::instance()->socketApi(), &SocketApi::fileActivityCommandReceived,
+        Systray::instance(), &Systray::showFileActivityDialog);
 
     // startup procedure.
     connect(&_checkConnectionTimer, &QTimer::timeout, this, &Application::slotCheckConnection);
@@ -244,15 +363,22 @@ Application::Application(int &argc, char **argv)
     connect(&_networkConfigurationManager, &QNetworkConfigurationManager::configurationChanged,
         this, &Application::slotSystemOnlineConfigurationChanged);
 
+#if defined(BUILD_UPDATER)
     // Update checks
-    UpdaterScheduler *updaterScheduler = new UpdaterScheduler(this);
+    auto *updaterScheduler = new UpdaterScheduler(this);
     connect(updaterScheduler, &UpdaterScheduler::updaterAnnouncement,
         _gui.data(), &ownCloudGui::slotShowTrayMessage);
     connect(updaterScheduler, &UpdaterScheduler::requestRestart,
         _folderManager.data(), &FolderMan::slotScheduleAppRestart);
+#endif
 
     // Cleanup at Quit.
     connect(this, &QCoreApplication::aboutToQuit, this, &Application::slotCleanup);
+
+    // Allow other classes to hook into isShowingSettingsDialog() signals (re-auth widgets, for example)
+    connect(_gui.data(), &ownCloudGui::isShowingSettingsDialog, this, &Application::slotGuiIsShowingSettings);
+
+    _gui->createTray();
 }
 
 Application::~Application()
@@ -264,6 +390,8 @@ Application::~Application()
     }
 
     // Remove the account from the account manager so it can be deleted.
+    disconnect(AccountManager::instance(), &AccountManager::accountRemoved,
+        this, &Application::slotAccountStateRemoved);
     AccountManager::instance()->shutdown();
 }
 
@@ -283,7 +411,7 @@ void Application::slotAccountStateRemoved(AccountState *accountState)
     }
 
     // if there is no more account, show the wizard.
-    if (AccountManager::instance()->accounts().isEmpty()) {
+    if (_gui && AccountManager::instance()->accounts().isEmpty()) {
         // allow to add a new account if there is non any more. Always think
         // about single account theming!
         OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
@@ -325,8 +453,8 @@ void Application::slotSystemOnlineConfigurationChanged(QNetworkConfiguration cnf
 
 void Application::slotCheckConnection()
 {
-    auto list = AccountManager::instance()->accounts();
-    foreach (const auto &accountState, list) {
+    const auto list = AccountManager::instance()->accounts();
+    for (const auto &accountState : list) {
         AccountState::State state = accountState->state();
 
         // Don't check if we're manually signed out or
@@ -353,7 +481,6 @@ void Application::slotCrash()
 
 void Application::slotownCloudWizardDone(int res)
 {
-    AccountManager *accountMan = AccountManager::instance();
     FolderMan *folderMan = FolderMan::instance();
 
     // During the wizard, scheduling of new syncs is disabled
@@ -365,7 +492,11 @@ void Application::slotownCloudWizardDone(int res)
         slotCheckConnection();
 
         // If one account is configured: enable autostart
-        bool shouldSetAutoStart = (accountMan->accounts().size() == 1);
+#ifndef QT_DEBUG
+        bool shouldSetAutoStart = AccountManager::instance()->accounts().size() == 1;
+#else
+        bool shouldSetAutoStart = false;
+#endif
 #ifdef Q_OS_MAC
         // Don't auto start when not being 'installed'
         shouldSetAutoStart = shouldSetAutoStart
@@ -375,7 +506,7 @@ void Application::slotownCloudWizardDone(int res)
             Utility::setLaunchOnStartup(_theme->appName(), _theme->appNameGUI(), true);
         }
 
-        _gui->slotShowSettings();
+        Systray::instance()->showWindow();
     }
 }
 
@@ -384,17 +515,24 @@ void Application::setupLogging()
     // might be called from second instance
     auto logger = Logger::instance();
     logger->setLogFile(_logFile);
-    logger->setLogDir(_logDir);
-    logger->setLogExpire(_logExpire);
-    logger->setLogFlush(_logFlush);
-    logger->setLogDebug(_logDebug);
+    if (_logFile.isEmpty()) {
+        logger->setLogDir(_logDir.isEmpty() ? ConfigFile().logDir() : _logDir);
+    }
+    logger->setLogExpire(_logExpire > 0 ? _logExpire : ConfigFile().logExpire());
+    logger->setLogFlush(_logFlush || ConfigFile().logFlush());
+    logger->setLogDebug(_logDebug || ConfigFile().logDebug());
     if (!logger->isLoggingToFile() && ConfigFile().automaticLogDir()) {
         logger->setupTemporaryFolderLogDir();
     }
 
     logger->enterNextLogFile();
 
-    qCInfo(lcApplication) << QString::fromLatin1("################## %1 locale:[%2] ui_lang:[%3] version:[%4] os:[%5]").arg(_theme->appName()).arg(QLocale::system().name()).arg(property("ui_lang").toString()).arg(_theme->version()).arg(Utility::platformName());
+    qCInfo(lcApplication) << "##################" << _theme->appName()
+                          << "locale:" << QLocale::system().name()
+                          << "ui_lang:" << property("ui_lang")
+                          << "version:" << _theme->version()
+                          << "os:" << Utility::platformName();
+    qCInfo(lcApplication) << "Arguments:" << qApp->arguments();
 }
 
 void Application::slotUseMonoIconsChanged(bool)
@@ -407,16 +545,30 @@ void Application::slotParseMessage(const QString &msg, QObject *)
     if (msg.startsWith(QLatin1String("MSG_PARSEOPTIONS:"))) {
         const int lengthOfMsgPrefix = 17;
         QStringList options = msg.mid(lengthOfMsgPrefix).split(QLatin1Char('|'));
+        _showLogWindow = false;
         parseOptions(options);
         setupLogging();
-    } else if (msg.startsWith(QLatin1String("MSG_SHOWSETTINGS"))) {
+        if (_showLogWindow) {
+            _gui->slotToggleLogBrowser(); // _showLogWindow is set in parseOptions.
+        }
+        if (_quitInstance) {
+            qApp->quit();
+        }
+
+    } else if (msg.startsWith(QLatin1String("MSG_SHOWMAINDIALOG"))) {
         qCInfo(lcApplication) << "Running for" << _startedAt.elapsed() / 1000.0 << "sec";
         if (_startedAt.elapsed() < 10 * 1000) {
             // This call is mirrored with the one in int main()
-            qCWarning(lcApplication) << "Ignoring MSG_SHOWSETTINGS, possibly double-invocation of client via session restore and auto start";
+            qCWarning(lcApplication) << "Ignoring MSG_SHOWMAINDIALOG, possibly double-invocation of client via session restore and auto start";
             return;
         }
-        showSettingsDialog();
+
+        // Show the main dialog only if there is at least one account configured
+        if (!AccountManager::instance()->accounts().isEmpty()) {
+            showMainDialog();
+        } else {
+            _gui->slotNewAccountWizard();
+        }
     }
 }
 
@@ -433,6 +585,8 @@ void Application::parseOptions(const QStringList &options)
         if (option == QLatin1String("--help") || option == QLatin1String("-h")) {
             setHelp();
             break;
+        } else if (option == QLatin1String("--quit") || option == QLatin1String("-q")) {
+            _quitInstance = true;
         } else if (option == QLatin1String("--logwindow") || option == QLatin1String("-l")) {
             _showLogWindow = true;
         } else if (option == QLatin1String("--logfile")) {
@@ -471,8 +625,11 @@ void Application::parseOptions(const QStringList &options)
             _debugMode = true;
         } else if (option == QLatin1String("--background")) {
             _backgroundMode = true;
-        } else if (option == QLatin1String("--version")) {
+        } else if (option == QLatin1String("--version") || option == QLatin1String("-v")) {
             _versionOnly = true;
+        } else if (option.endsWith(QStringLiteral(APPLICATION_DOTVIRTUALFILE_SUFFIX))) {
+            // virtual file, open it after the Folder were created (if the app is not terminated)
+            QTimer::singleShot(0, this, [this, option] { openVirtualFile(option); });
         } else {
             showHint("Unrecognized option '" + option.toStdString() + "'");
         }
@@ -584,11 +741,11 @@ void Application::setupTranslations()
     if (!enforcedLocale.isEmpty())
         uiLanguages.prepend(enforcedLocale);
 
-    QTranslator *translator = new QTranslator(this);
-    QTranslator *qtTranslator = new QTranslator(this);
-    QTranslator *qtkeychainTranslator = new QTranslator(this);
+    auto *translator = new QTranslator(this);
+    auto *qtTranslator = new QTranslator(this);
+    auto *qtkeychainTranslator = new QTranslator(this);
 
-    foreach (QString lang, uiLanguages) {
+    for (QString lang : qAsConst(uiLanguages)) {
         lang.replace(QLatin1Char('-'), QLatin1Char('_')); // work around QTBUG-25973
         lang = substLang(lang);
         const QString trPath = applicationTrPath();
@@ -638,10 +795,59 @@ bool Application::versionOnly()
     return _versionOnly;
 }
 
-void Application::showSettingsDialog()
+void Application::showMainDialog()
 {
-    _gui->slotShowSettings();
+    _gui->slotOpenMainDialog();
 }
 
+void Application::slotGuiIsShowingSettings()
+{
+    emit isShowingSettingsDialog();
+}
+
+void Application::openVirtualFile(const QString &filename)
+{
+    QString virtualFileExt = QStringLiteral(APPLICATION_DOTVIRTUALFILE_SUFFIX);
+    if (!filename.endsWith(virtualFileExt)) {
+        qWarning(lcApplication) << "Can only handle file ending in .owncloud. Unable to open" << filename;
+        return;
+    }
+    auto folder = FolderMan::instance()->folderForPath(filename);
+    if (!folder) {
+        qWarning(lcApplication) << "Can't find sync folder for" << filename;
+        // TODO: show a QMessageBox for errors
+        return;
+    }
+    QString relativePath = QDir::cleanPath(filename).mid(folder->cleanPath().length() + 1);
+    folder->implicitlyHydrateFile(relativePath);
+    QString normalName = filename.left(filename.size() - virtualFileExt.size());
+    auto con = QSharedPointer<QMetaObject::Connection>::create();
+    *con = connect(folder, &Folder::syncFinished, folder, [folder, con, normalName] {
+        folder->disconnect(*con);
+        if (QFile::exists(normalName)) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(normalName));
+        }
+    });
+}
+
+void Application::tryTrayAgain()
+{
+    qCInfo(lcApplication) << "Trying tray icon, tray available:" << QSystemTrayIcon::isSystemTrayAvailable();
+    _gui->hideAndShowTray();
+}
+
+bool Application::event(QEvent *event)
+{
+#ifdef Q_OS_MAC
+    if (event->type() == QEvent::FileOpen) {
+        QFileOpenEvent *openEvent = static_cast<QFileOpenEvent *>(event);
+        qCDebug(lcApplication) << "QFileOpenEvent" << openEvent->file();
+        // virtual file, open it after the Folder were created (if the app is not terminated)
+        QString fn = openEvent->file();
+        QTimer::singleShot(0, this, [this, fn] { openVirtualFile(fn); });
+    }
+#endif
+    return SharedTools::QtSingleApplication::event(event);
+}
 
 } // namespace OCC

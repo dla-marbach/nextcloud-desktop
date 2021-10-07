@@ -17,20 +17,17 @@
  */
 
 #include "filesystembase.h"
+#include "utility.h"
+#include "common/asserts.h"
 
 #include <QDateTime>
 #include <QDir>
 #include <QUrl>
 #include <QFile>
-#include <QCryptographicHash>
 #include <QCoreApplication>
 
 #include <sys/stat.h>
 #include <sys/types.h>
-
-#ifdef ZLIB_FOUND
-#include <zlib.h>
-#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -145,13 +142,7 @@ bool FileSystem::rename(const QString &originFileName,
             (wchar_t *)dest.utf16(),
             MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH);
         if (!success) {
-            wchar_t *string = 0;
-            FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, ::GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                (LPWSTR)&string, 0, NULL);
-
-            error = QString::fromWCharArray(string);
-            LocalFree((HLOCAL)string);
+            error = Utility::formatWinError(GetLastError());
         }
     } else
 #endif
@@ -179,7 +170,7 @@ bool FileSystem::uncheckedRenameReplace(const QString &originFileName,
     QString *errorString)
 {
 #ifndef Q_OS_WIN
-    bool success;
+    bool success = false;
     QFile orig(originFileName);
     // We want a rename that also overwites.  QFile::rename does not overwite.
     // Qt 5.1 has QSaveFile::renameOverwrite we could use.
@@ -214,14 +205,8 @@ bool FileSystem::uncheckedRenameReplace(const QString &originFileName,
         (wchar_t *)dest.utf16(),
         MOVEFILE_REPLACE_EXISTING + MOVEFILE_COPY_ALLOWED + MOVEFILE_WRITE_THROUGH);
     if (!ok) {
-        wchar_t *string = 0;
-        FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-            NULL, ::GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-            (LPWSTR)&string, 0, NULL);
-
-        *errorString = QString::fromWCharArray(string);
+        *errorString = Utility::formatWinError(GetLastError());
         qCWarning(lcFileSystem) << "Renaming temp file to final failed: " << *errorString;
-        LocalFree((HLOCAL)string);
         return false;
     }
 #endif
@@ -248,7 +233,7 @@ bool FileSystem::openAndSeekFileSharedRead(QFile *file, QString *errorOrNull, qi
     DWORD creationDisp = OPEN_EXISTING;
 
     // Create the file handle.
-    SECURITY_ATTRIBUTES securityAtts = { sizeof(SECURITY_ATTRIBUTES), NULL, FALSE };
+    SECURITY_ATTRIBUTES securityAtts = { sizeof(SECURITY_ATTRIBUTES), nullptr, FALSE };
     QString fName = longWinPath(file->fileName());
 
     HANDLE fileHandle = CreateFileW(
@@ -258,7 +243,7 @@ bool FileSystem::openAndSeekFileSharedRead(QFile *file, QString *errorOrNull, qi
         &securityAtts,
         creationDisp,
         FILE_ATTRIBUTE_NORMAL,
-        NULL);
+        nullptr);
 
     // Bail out on error.
     if (fileHandle == INVALID_HANDLE_VALUE) {
@@ -271,7 +256,7 @@ bool FileSystem::openAndSeekFileSharedRead(QFile *file, QString *errorOrNull, qi
     // the fd the handle will be closed too.
     int fd = _open_osfhandle((intptr_t)fileHandle, _O_RDONLY);
     if (fd == -1) {
-        error = "could not make fd from handle";
+        error = QStringLiteral("could not make fd from handle");
         CloseHandle(fileHandle);
         return false;
     }
@@ -343,68 +328,21 @@ QString FileSystem::fileSystemForPath(const QString &path)
 {
     // See also QStorageInfo (Qt >=5.4) and GetVolumeInformationByHandleW (>= Vista)
     QString drive = path.left(2);
-    if (!drive.endsWith(":"))
+    if (!drive.endsWith(QLatin1Char(':')))
         return QString();
-    drive.append('\\');
+    drive.append(QLatin1Char('\\'));
 
     const size_t fileSystemBufferSize = 4096;
     TCHAR fileSystemBuffer[fileSystemBufferSize];
 
     if (!GetVolumeInformationW(
             reinterpret_cast<LPCWSTR>(drive.utf16()),
-            NULL, 0,
-            NULL, NULL, NULL,
+            nullptr, 0,
+            nullptr, nullptr, nullptr,
             fileSystemBuffer, fileSystemBufferSize)) {
         return QString();
     }
     return QString::fromUtf16(reinterpret_cast<const ushort *>(fileSystemBuffer));
-}
-#endif
-
-#define BUFSIZE qint64(500 * 1024) // 500 KiB
-
-static QByteArray readToCrypto( const QString& filename, QCryptographicHash::Algorithm algo )
- {
-     QFile file(filename);
-     QByteArray arr;
-     QCryptographicHash crypto( algo );
-
-     if (file.open(QIODevice::ReadOnly)) {
-         if (crypto.addData(&file)) {
-             arr = crypto.result().toHex();
-         }
-     }
-     return arr;
- }
-
-QByteArray FileSystem::calcMd5(const QString &filename)
-{
-    return readToCrypto(filename, QCryptographicHash::Md5);
-}
-
-QByteArray FileSystem::calcSha1(const QString &filename)
-{
-    return readToCrypto(filename, QCryptographicHash::Sha1);
-}
-
-#ifdef ZLIB_FOUND
-QByteArray FileSystem::calcAdler32(const QString &filename)
-{
-    QFile file(filename);
-    const qint64 bufSize = qMin(BUFSIZE, file.size() + 1);
-    QByteArray buf(bufSize, Qt::Uninitialized);
-
-    unsigned int adler = adler32(0L, Z_NULL, 0);
-    if (file.open(QIODevice::ReadOnly)) {
-        qint64 size;
-        while (!file.atEnd()) {
-            size = file.read(buf.data(), bufSize);
-            if (size > 0)
-                adler = adler32(adler, (const Bytef *)buf.data(), size);
-        }
-    }
-
-    return QByteArray::number(adler, 16);
 }
 #endif
 
@@ -429,17 +367,18 @@ bool FileSystem::remove(const QString &fileName, QString *errorString)
 
 bool FileSystem::moveToTrash(const QString &fileName, QString *errorString)
 {
+    // TODO: Qt 5.15 bool QFile::moveToTrash()
 #if defined Q_OS_UNIX && !defined Q_OS_MAC
     QString trashPath, trashFilePath, trashInfoPath;
     QString xdgDataHome = QFile::decodeName(qgetenv("XDG_DATA_HOME"));
     if (xdgDataHome.isEmpty()) {
-        trashPath = QDir::homePath() + "/.local/share/Trash/"; // trash path that should exist
+        trashPath = QDir::homePath() + QStringLiteral("/.local/share/Trash/"); // trash path that should exist
     } else {
-        trashPath = xdgDataHome + "/Trash/";
+        trashPath = xdgDataHome + QStringLiteral("/Trash/");
     }
 
-    trashFilePath = trashPath + "files/"; // trash file path contain delete files
-    trashInfoPath = trashPath + "info/"; // trash info path contain delete files information
+    trashFilePath = trashPath + QStringLiteral("files/"); // trash file path contain delete files
+    trashInfoPath = trashPath + QStringLiteral("info/"); // trash info path contain delete files information
 
     if (!(QDir().mkpath(trashFilePath) && QDir().mkpath(trashInfoPath))) {
         *errorString = QCoreApplication::translate("FileSystem", "Could not make directories in trash");
@@ -451,18 +390,18 @@ bool FileSystem::moveToTrash(const QString &fileName, QString *errorString)
     QDir file;
     int suffix_number = 1;
     if (file.exists(trashFilePath + f.fileName())) { //file in trash already exists, move to "filename.1"
-        QString path = trashFilePath + f.fileName() + ".";
+        QString path = trashFilePath + f.fileName() + QLatin1Char('.');
         while (file.exists(path + QString::number(suffix_number))) { //or to "filename.2" if "filename.1" exists, etc
             suffix_number++;
         }
         if (!file.rename(f.absoluteFilePath(), path + QString::number(suffix_number))) { // rename(file old path, file trash path)
-            *errorString = QCoreApplication::translate("FileSystem", "Could not move '%1' to '%2'")
+            *errorString = QCoreApplication::translate("FileSystem", R"(Could not move "%1" to "%2")")
                                .arg(f.absoluteFilePath(), path + QString::number(suffix_number));
             return false;
         }
     } else {
         if (!file.rename(f.absoluteFilePath(), trashFilePath + f.fileName())) { // rename(file old path, file trash path)
-            *errorString = QCoreApplication::translate("FileSystem", "Could not move '%1' to '%2'")
+            *errorString = QCoreApplication::translate("FileSystem", R"(Could not move "%1" to "%2")")
                                .arg(f.absoluteFilePath(), trashFilePath + f.fileName());
             return false;
         }
@@ -470,11 +409,11 @@ bool FileSystem::moveToTrash(const QString &fileName, QString *errorString)
 
     // create file format for trash info file----- START
     QFile infoFile;
-    if (file.exists(trashInfoPath + f.fileName() + ".trashinfo")) { //TrashInfo file already exists, create "filename.1.trashinfo"
-        QString filename = trashInfoPath + f.fileName() + "." + QString::number(suffix_number) + ".trashinfo";
+    if (file.exists(trashInfoPath + f.fileName() + QStringLiteral(".trashinfo"))) { //TrashInfo file already exists, create "filename.1.trashinfo"
+        QString filename = trashInfoPath + f.fileName() + QLatin1Char('.') + QString::number(suffix_number) + QStringLiteral(".trashinfo");
         infoFile.setFileName(filename); //filename+.trashinfo //  create file information file in /.local/share/Trash/info/ folder
     } else {
-        QString filename = trashInfoPath + f.fileName() + ".trashinfo";
+        QString filename = trashInfoPath + f.fileName() + QStringLiteral(".trashinfo");
         infoFile.setFileName(filename); //filename+.trashinfo //  create file information file in /.local/share/Trash/info/ folder
     }
 
@@ -482,16 +421,13 @@ bool FileSystem::moveToTrash(const QString &fileName, QString *errorString)
 
     QTextStream stream(&infoFile); // for write data on open file
 
-    QByteArray info = "[Trash Info]\n";
-    info += "Path=";
-    info += QUrl::toPercentEncoding(f.absoluteFilePath(), "~_-./");
-    info += '\n';
-    info += "DeletionDate=";
-    info += QDateTime::currentDateTime().toString(Qt::ISODate).toLatin1();
-    info += '\n';
-
-    stream << info;
-
+    stream << "[Trash Info]\n"
+           << "Path="
+           << QUrl::toPercentEncoding(f.absoluteFilePath(), "~_-./")
+           << "\n"
+           << "DeletionDate="
+           << QDateTime::currentDateTime().toString(Qt::ISODate)
+           << '\n';
     infoFile.close();
 
     // create info file format of trash file----- END
@@ -507,18 +443,18 @@ bool FileSystem::moveToTrash(const QString &fileName, QString *errorString)
 bool FileSystem::isFileLocked(const QString &fileName)
 {
 #ifdef Q_OS_WIN
-    const wchar_t *wuri = reinterpret_cast<const wchar_t *>(fileName.utf16());
     // Check if file exists
-    DWORD attr = GetFileAttributesW(wuri);
+    const QString fName = longWinPath(fileName);
+    DWORD attr = GetFileAttributesW(reinterpret_cast<const wchar_t *>(fName.utf16()));
     if (attr != INVALID_FILE_ATTRIBUTES) {
         // Try to open the file with as much access as possible..
         HANDLE win_h = CreateFileW(
-            wuri,
+            reinterpret_cast<const wchar_t *>(fName.utf16()),
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            NULL, OPEN_EXISTING,
+            nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
-            NULL);
+            nullptr);
 
         if (win_h == INVALID_HANDLE_VALUE) {
             /* could not be opened, so locked? */
@@ -536,14 +472,22 @@ bool FileSystem::isFileLocked(const QString &fileName)
 
 bool FileSystem::isLnkFile(const QString &filename)
 {
-    return filename.endsWith(".lnk");
+    return filename.endsWith(QLatin1String(".lnk"));
+}
+
+bool FileSystem::isExcludeFile(const QString &filename)
+{
+    return filename.compare(QStringLiteral(".sync-exclude.lst"), Qt::CaseInsensitive) == 0
+        || filename.compare(QStringLiteral("exclude.lst"), Qt::CaseInsensitive) == 0
+        || filename.endsWith(QStringLiteral("/.sync-exclude.lst"), Qt::CaseInsensitive)
+        || filename.endsWith(QStringLiteral("/exclude.lst"), Qt::CaseInsensitive);
 }
 
 bool FileSystem::isJunction(const QString &filename)
 {
 #ifdef Q_OS_WIN
     WIN32_FIND_DATA findData;
-    HANDLE hFind = FindFirstFileEx((const wchar_t *)filename.utf16(), FindExInfoBasic, &findData, FindExSearchNameMatch, NULL, 0);
+    HANDLE hFind = FindFirstFileEx(reinterpret_cast<const wchar_t *>(longWinPath(filename).utf16()), FindExInfoBasic, &findData, FindExSearchNameMatch, nullptr, 0);
     if (hFind != INVALID_HANDLE_VALUE) {
         FindClose(hFind);
         return false;
@@ -556,5 +500,29 @@ bool FileSystem::isJunction(const QString &filename)
     return false;
 #endif
 }
+
+#ifdef Q_OS_WIN
+QString FileSystem::pathtoUNC(const QString &_str)
+{
+    Q_ASSERT(QFileInfo(_str).isAbsolute());
+    if (_str.isEmpty()) {
+        return _str;
+    }
+    const QString str = QDir::toNativeSeparators(_str);
+    const QLatin1Char sep('\\');
+
+    // we already have a unc path
+    if (str.startsWith(sep + sep)) {
+        return str;
+    }
+    // prepend \\?\ and to support long names
+
+    if (str.at(0) == sep) {
+        // should not happen as we require the path to be absolute
+        return QStringLiteral(R"(\\?)") + str;
+    }
+    return QStringLiteral(R"(\\?\)") + str;
+}
+#endif
 
 } // namespace OCC

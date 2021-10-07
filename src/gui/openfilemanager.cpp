@@ -22,6 +22,12 @@
 #include <QDesktopServices>
 #include <QApplication>
 
+#define QTLEGACY (QT_VERSION < QT_VERSION_CHECK(5,9,0))
+
+#if !(QTLEGACY)
+#include <QOperatingSystemVersion>
+#endif
+
 namespace OCC {
 
 // according to the QStandardDir impl from Qt5
@@ -89,11 +95,15 @@ void showInFileManager(const QString &localPath)
 {
     if (Utility::isWindows()) {
 #ifdef Q_OS_WIN
-        if (QSysInfo::windowsVersion() <= QSysInfo::WV_2003) {
-            return;
-        }
+        #if QTLEGACY
+            if (QSysInfo::windowsVersion() < QSysInfo::WV_WINDOWS10)
+        #else
+            if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows7)
+        #endif
+                return;
 #endif
-        QString explorer = "explorer.exe "; // FIXME: we trust it's in PATH
+
+        const QString explorer = "explorer.exe "; // FIXME: we trust it's in PATH
         QFileInfo fi(localPath);
 
         // canonicalFilePath returns empty if the file does not exist
@@ -113,13 +123,13 @@ void showInFileManager(const QString &localPath)
             // only around the path. Use setNativeArguments to bypass this logic.
             p.setNativeArguments(nativeArgs);
 #endif
-            p.start(explorer);
+            p.start(explorer, QStringList {});
             p.waitForFinished(5000);
         }
     } else if (Utility::isMac()) {
         QStringList scriptArgs;
         scriptArgs << QLatin1String("-e")
-                   << QString::fromLatin1("tell application \"Finder\" to reveal POSIX file \"%1\"")
+                   << QString::fromLatin1(R"(tell application "Finder" to reveal POSIX file "%1")")
                           .arg(localPath);
         QProcess::execute(QLatin1String("/usr/bin/osascript"), scriptArgs);
         scriptArgs.clear();

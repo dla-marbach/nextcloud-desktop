@@ -62,13 +62,19 @@ class FolderMan : public QObject
 {
     Q_OBJECT
 public:
-    ~FolderMan();
+    ~FolderMan() override;
     static FolderMan *instance();
 
     int setupFolders();
     int setupFoldersMigration();
 
-    OCC::Folder::Map map();
+    /**
+     * Returns a list of keys that can't be read because they are from
+     * future versions.
+     */
+    static void backwardMigrationSettingsKeys(QStringList *deleteKeys, QStringList *ignoreKeys);
+
+    const Folder::Map &map() const;
 
     /** Adds a folder for an account, ensures the journal is gone and saves it in the settings.
       */
@@ -87,7 +93,7 @@ public:
       */
     QStringList findFileInLocalFolders(const QString &relPath, const AccountPtr acc);
 
-    /** Returns the folder by alias or NULL if no folder with the alias exists. */
+    /** Returns the folder by alias or \c nullptr if no folder with the alias exists. */
     Folder *folder(const QString &);
 
     /**
@@ -158,8 +164,21 @@ public:
 
     /**
      * Access to the currently syncing folder.
+     *
+     * Note: This is only the folder that's currently syncing *as-scheduled*. There
+     * may be externally-managed syncs such as from placeholder hydrations.
+     *
+     * See also isAnySyncRunning()
      */
     Folder *currentSyncFolder() const;
+
+    /**
+     * Returns true if any folder is currently syncing.
+     *
+     * This might be a FolderMan-scheduled sync, or a externally
+     * managed sync like a placeholder hydration.
+     */
+    bool isAnySyncRunning() const;
 
     /** Removes all folders */
     int unloadAndDeleteAllFolders();
@@ -182,13 +201,6 @@ public:
     void setDirtyProxy();
     void setDirtyNetworkLimits();
 
-    /**
-     * Terminates the current folder sync.
-     *
-     * It does not switch the folder to paused state.
-     */
-    void terminateSyncProcess();
-
 signals:
     /**
       * signal to indicate a folder has changed its sync state.
@@ -206,6 +218,11 @@ signals:
      * Emitted whenever the list of configured folders changes.
      */
     void folderListChanged(const Folder::Map &);
+
+    /**
+     * Emitted once slotRemoveFoldersForAccount is done wiping
+     */
+    void wipeDone(AccountState *account, bool success);
 
 public slots:
 
@@ -231,6 +248,9 @@ public slots:
     // slot to schedule an ETag job (from Folder only)
     void slotScheduleETagJob(const QString &alias, RequestEtagJob *job);
 
+    /** Wipe folder */
+    void slotWipeFolderForAccount(AccountState *accountState);
+
 private slots:
     void slotFolderSyncPaused(Folder *, bool paused);
     void slotFolderCanSyncChanged();
@@ -243,6 +263,8 @@ private slots:
     // slot to take the next folder from queue and start syncing.
     void slotStartScheduledFolderSync();
     void slotEtagPollTimerTimeout();
+
+    void slotAccountRemoved(AccountState *accountState);
 
     void slotRemoveFoldersForAccount(AccountState *accountState);
 
@@ -268,12 +290,16 @@ private slots:
      */
     void slotScheduleFolderByTime();
 
+    void slotSetupPushNotifications(const Folder::Map &);
+    void slotProcessFilesPushNotification(Account *account);
+    void slotConnectToPushNotifications(Account *account);
+
 private:
     /** Adds a new folder, does not add it to the account settings and
      *  does not set an account on the new folder.
       */
     Folder *addFolderInternal(FolderDefinition folderDefinition,
-        AccountState *accountState);
+        AccountState *accountState, std::unique_ptr<Vfs> vfs);
 
     /* unloads a folder object, does not delete it */
     void unloadFolder(Folder *);
@@ -291,14 +317,22 @@ private:
     // restarts the application (Linux only)
     void restartApplication();
 
-    void setupFoldersHelper(QSettings &settings, AccountStatePtr account, bool backwardsCompatible);
+    void setupFoldersHelper(QSettings &settings, AccountStatePtr account, const QStringList &ignoreKeys, bool backwardsCompatible, bool foldersWithPlaceholders);
+
+    void runEtagJobsIfPossible(const QList<Folder *> &folderMap);
+    void runEtagJobIfPossible(Folder *folder);
+
+    bool pushNotificationsFilesReady(Account *account);
 
     QSet<Folder *> _disabledFolders;
     Folder::Map _folderMap;
     QString _folderConfigPath;
-    Folder *_currentSyncFolder;
+    Folder *_currentSyncFolder = nullptr;
     QPointer<Folder> _lastSyncFolder;
-    bool _syncEnabled;
+    bool _syncEnabled = true;
+
+    /// Folder aliases from the settings that weren't read
+    QSet<QString> _additionalBlockedFolderAliases;
 
     /// Starts regular etag query jobs
     QTimer _etagPollTimer;
@@ -320,7 +354,7 @@ private:
     QScopedPointer<SocketApi> _socketApi;
     NavigationPaneHelper _navigationPaneHelper;
 
-    bool _appRestartRequired;
+    bool _appRestartRequired = false;
 
     static FolderMan *_instance;
     explicit FolderMan(QObject *parent = nullptr);

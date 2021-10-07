@@ -18,14 +18,29 @@
 
 #include "abstractnetworkjob.h"
 
+#include "common/result.h"
+
 #include <QBuffer>
 #include <QUrlQuery>
+#include <QJsonDocument>
 #include <functional>
 
 class QUrl;
 class QJsonObject;
 
 namespace OCC {
+
+/** Strips quotes and gzip annotations */
+OWNCLOUDSYNC_EXPORT QByteArray parseEtag(const char *header);
+
+struct HttpError
+{
+    int code; // HTTP error code
+    QString message;
+};
+
+template <typename T>
+using HttpResult = Result<T, HttpError>;
 
 /**
  * @brief The EntityExistsJob class
@@ -253,14 +268,16 @@ class OWNCLOUDSYNC_EXPORT MkColJob : public AbstractNetworkJob
 
 public:
     explicit MkColJob(AccountPtr account, const QString &path, QObject *parent = nullptr);
+    explicit MkColJob(AccountPtr account, const QString &path, const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent = nullptr);
     explicit MkColJob(AccountPtr account, const QUrl &url,
         const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent = nullptr);
     void start() override;
 
 signals:
-    void finished(QNetworkReply::NetworkError);
+    void finishedWithError(QNetworkReply *reply);
+    void finishedWithoutError();
 
-private slots:
+private:
     bool finished() override;
 };
 
@@ -333,7 +350,8 @@ public:
     void start() override;
 
 signals:
-    void etagRetreived(const QString &etag);
+    void etagRetrieved(const QByteArray &etag, const QDateTime &time);
+    void finishedWithResult(const HttpResult<QByteArray> &etag);
 
 private slots:
     bool finished() override;
@@ -358,6 +376,13 @@ class OWNCLOUDSYNC_EXPORT JsonApiJob : public AbstractNetworkJob
 {
     Q_OBJECT
 public:
+    enum class Verb {
+        Get,
+        Post,
+        Put,
+        Delete,
+    };
+
     explicit JsonApiJob(const AccountPtr &account, const QString &path, QObject *parent = nullptr);
 
     /**
@@ -372,6 +397,10 @@ public:
      */
     void addQueryParams(const QUrlQuery &params);
     void addRawHeader(const QByteArray &headerName, const QByteArray &value);
+
+    void setBody(const QJsonDocument &body);
+
+    void setVerb(Verb value);
 
 public slots:
     void start() override;
@@ -395,9 +424,20 @@ signals:
      */
     void etagResponseHeaderReceived(const QByteArray &value, int statusCode);
 
+    /**
+     * @brief desktopNotificationStatusReceived - signal to report if notifications are allowed
+     * @param status - set desktop notifications allowed status
+     */
+    void allowDesktopNotificationsChanged(bool isAllowed);
+
 private:
+    QByteArray _body;
     QUrlQuery _additionalParams;
     QNetworkRequest _request;
+
+    Verb _verb = Verb::Get;
+
+    QByteArray verbToString() const;
 };
 
 /**
@@ -409,12 +449,15 @@ class OWNCLOUDSYNC_EXPORT DetermineAuthTypeJob : public QObject
     Q_OBJECT
 public:
     enum AuthType {
+        NoAuthType, // used only before we got a chance to probe the server
+#ifdef WITH_WEBENGINE
+        WebViewFlow,
+#endif // WITH_WEBENGINE
         Basic, // also the catch-all fallback for backwards compatibility reasons
         OAuth,
-        Shibboleth,
-        WebViewFlow,
         LoginFlowV2
     };
+    Q_ENUM(AuthType)
 
     explicit DetermineAuthTypeJob(AccountPtr account, QObject *parent = nullptr);
     void start();
@@ -422,13 +465,15 @@ signals:
     void authType(AuthType);
 
 private:
-    void checkBothDone();
+    void checkAllDone();
 
     AccountPtr _account;
-    AuthType _resultGet = Basic;
-    AuthType _resultPropfind = Basic;
+    AuthType _resultGet = NoAuthType;
+    AuthType _resultPropfind = NoAuthType;
+    AuthType _resultOldFlow = NoAuthType;
     bool _getDone = false;
     bool _propfindDone = false;
+    bool _oldFlowDone = false;
 };
 
 /**

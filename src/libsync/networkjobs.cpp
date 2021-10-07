@@ -13,6 +13,7 @@
  * for more details.
  */
 
+#include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QNetworkRequest>
 #include <QNetworkAccessManager>
@@ -29,7 +30,11 @@
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <qloggingcategory.h>
+#ifndef TOKEN_AUTH_ONLY
 #include <QPainter>
+#include <QPainterPath>
+#endif
 
 #include "networkjobs.h"
 #include "account.h"
@@ -52,6 +57,25 @@ Q_LOGGING_CATEGORY(lcJsonApiJob, "nextcloud.sync.networkjob.jsonapi", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcDetermineAuthTypeJob, "nextcloud.sync.networkjob.determineauthtype", QtInfoMsg)
 const int notModifiedStatusCode = 304;
 
+QByteArray parseEtag(const char *header)
+{
+    if (!header)
+        return QByteArray();
+    QByteArray arr = header;
+
+    // Weak E-Tags can appear when gzip compression is on, see #3946
+    if (arr.startsWith("W/"))
+        arr = arr.mid(2);
+
+    // https://github.com/owncloud/client/issues/1195
+    arr.replace("-gzip", "");
+
+    if (arr.length() >= 2 && arr.startsWith('"') && arr.endsWith('"')) {
+        arr = arr.mid(1, arr.length() - 2);
+    }
+    return arr;
+}
+
 RequestEtagJob::RequestEtagJob(AccountPtr account, const QString &path, QObject *parent)
     : AbstractNetworkJob(account, path, parent)
 {
@@ -60,16 +84,7 @@ RequestEtagJob::RequestEtagJob(AccountPtr account, const QString &path, QObject 
 void RequestEtagJob::start()
 {
     QNetworkRequest req;
-    if (_account && _account->rootEtagChangesNotOnlySubFolderEtags()) {
-        // Fixed from 8.1 https://github.com/owncloud/client/issues/3730
-        req.setRawHeader("Depth", "0");
-    } else {
-        // Let's always request all entries inside a directory. There are/were bugs in the server
-        // where a root or root-folder ETag is not updated when its contents change. We work around
-        // this by concatenating the ETags of the root and its contents.
-        req.setRawHeader("Depth", "1");
-        // See https://github.com/owncloud/core/issues/5255 and others
-    }
+    req.setRawHeader("Depth", "0");
 
     QByteArray xml("<?xml version=\"1.0\" ?>\n"
                    "<d:propfind xmlns:d=\"DAV:\">\n"
@@ -77,7 +92,7 @@ void RequestEtagJob::start()
                    "    <d:getetag/>\n"
                    "  </d:prop>\n"
                    "</d:propfind>\n");
-    QBuffer *buf = new QBuffer(this);
+    auto *buf = new QBuffer(this);
     buf->setData(xml);
     buf->open(QIODevice::ReadOnly);
     // assumes ownership
@@ -94,21 +109,31 @@ bool RequestEtagJob::finished()
     qCInfo(lcEtagJob) << "Request Etag of" << reply()->request().url() << "FINISHED WITH STATUS"
                       <<  replyStatusString();
 
-    if (reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute) == 207) {
+    auto httpCode = reply()->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (httpCode == 207) {
         // Parse DAV response
         QXmlStreamReader reader(reply());
-        reader.addExtraNamespaceDeclaration(QXmlStreamNamespaceDeclaration("d", "DAV:"));
-        QString etag;
+        reader.addExtraNamespaceDeclaration(QXmlStreamNamespaceDeclaration(QStringLiteral("d"), QStringLiteral("DAV:")));
+        QByteArray etag;
         while (!reader.atEnd()) {
             QXmlStreamReader::TokenType type = reader.readNext();
             if (type == QXmlStreamReader::StartElement && reader.namespaceUri() == QLatin1String("DAV:")) {
                 QString name = reader.name().toString();
                 if (name == QLatin1String("getetag")) {
-                    etag += reader.readElementText();
+                    auto etagText = reader.readElementText();
+                    auto parsedTag = parseEtag(etagText.toUtf8());
+                    if (!parsedTag.isEmpty()) {
+                        etag += parsedTag;
+                    } else {
+                        etag += etagText.toUtf8();
+                    }
                 }
             }
         }
-        emit etagRetreived(etag);
+        emit etagRetrieved(etag, QDateTime::fromString(QString::fromUtf8(_responseTimestamp), Qt::RFC2822Date));
+        emit finishedWithResult(etag);
+    } else {
+        emit finishedWithResult(HttpError{ httpCode, errorString() });
     }
     return true;
 }
@@ -117,6 +142,12 @@ bool RequestEtagJob::finished()
 
 MkColJob::MkColJob(AccountPtr account, const QString &path, QObject *parent)
     : AbstractNetworkJob(account, path, parent)
+{
+}
+
+MkColJob::MkColJob(AccountPtr account, const QString &path, const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent)
+    : AbstractNetworkJob(account, path, parent)
+    , _extraHeaders(extraHeaders)
 {
 }
 
@@ -151,7 +182,11 @@ bool MkColJob::finished()
     qCInfo(lcMkColJob) << "MKCOL of" << reply()->request().url() << "FINISHED WITH STATUS"
                        << replyStatusString();
 
-    emit finished(reply()->error());
+    if (reply()->error() != QNetworkReply::NoError) {
+        Q_EMIT finishedWithError(reply());
+    } else {
+        Q_EMIT finishedWithoutError();
+    }
     return true;
 }
 
@@ -181,9 +216,7 @@ static QString readContentsAsString(QXmlStreamReader &reader)
 }
 
 
-LsColXMLParser::LsColXMLParser()
-{
-}
+LsColXMLParser::LsColXMLParser() = default;
 
 bool LsColXMLParser::parse(const QByteArray &xml, QHash<QString, ExtraFolderInfo> *fileInfo, const QString &expectedPath)
 {
@@ -208,7 +241,9 @@ bool LsColXMLParser::parse(const QByteArray &xml, QHash<QString, ExtraFolderInfo
             if (name == QLatin1String("href")) {
                 // We don't use URL encoding in our request URL (which is the expected path) (QNAM will do it for us)
                 // but the result will have URL encoding..
-                QString hrefString = QString::fromUtf8(QByteArray::fromPercentEncoding(reader.readElementText().toUtf8()));
+                QString hrefString = QUrl::fromLocalFile(QUrl::fromPercentEncoding(reader.readElementText().toUtf8()))
+                        .adjusted(QUrl::NormalizePathSegments)
+                        .path();
                 if (!hrefString.startsWith(expectedPath)) {
                     qCWarning(lcLsColJob) << "Invalid href" << hrefString << "expected starting with" << expectedPath;
                     return false;
@@ -340,7 +375,7 @@ void LsColJob::start()
                    "  <d:prop>\n"
         + propStr + "  </d:prop>\n"
                     "</d:propfind>\n");
-    QBuffer *buf = new QBuffer(this);
+    auto *buf = new QBuffer(this);
     buf->setData(xml);
     buf->open(QIODevice::ReadOnly);
     if (_url.isValid()) {
@@ -372,16 +407,13 @@ bool LsColJob::finished()
         connect(&parser, &LsColXMLParser::finishedWithoutError,
             this, &LsColJob::finishedWithoutError);
 
-        QString expectedPath = reply()->request().url().path(); // something like "/owncloud/remote.php/webdav/folder"
+        QString expectedPath = reply()->request().url().path(); // something like "/owncloud/remote.php/dav/folder"
         if (!parser.parse(reply()->readAll(), &_folderInfos, expectedPath)) {
             // XML parse error
             emit finishedWithError(reply());
         }
-    } else if (httpCode == 207) {
-        // wrong content type
-        emit finishedWithError(reply());
     } else {
-        // wrong HTTP code or any other network error
+        // wrong content type, wrong HTTP code or any other network error
         emit finishedWithError(reply());
     }
 
@@ -562,7 +594,7 @@ void PropfindJob::start()
         + propStr + "  </d:prop>\n"
                     "</d:propfind>\n";
 
-    QBuffer *buf = new QBuffer(this);
+    auto *buf = new QBuffer(this);
     buf->setData(xml);
     buf->open(QIODevice::ReadOnly);
     sendRequest("PROPFIND", makeDavUrl(path()), req, buf);
@@ -647,6 +679,10 @@ void AvatarJob::start()
 
 QImage AvatarJob::makeCircularAvatar(const QImage &baseAvatar)
 {
+    if (baseAvatar.isNull()) {
+        return {};
+    }
+
     int dim = baseAvatar.width();
 
     QImage avatar(dim, dim, QImage::Format_ARGB32);
@@ -724,7 +760,7 @@ void ProppatchJob::start()
         + propStr + "  </d:prop></d:set>\n"
                     "</d:propertyupdate>\n";
 
-    QBuffer *buf = new QBuffer(this);
+    auto *buf = new QBuffer(this);
     buf->setData(xml);
     buf->open(QIODevice::ReadOnly);
     sendRequest("PROPPATCH", makeDavUrl(path()), req, buf);
@@ -794,13 +830,49 @@ void JsonApiJob::addRawHeader(const QByteArray &headerName, const QByteArray &va
    _request.setRawHeader(headerName, value);
 }
 
+void JsonApiJob::setBody(const QJsonDocument &body)
+{
+    _body = body.toJson();
+    qCDebug(lcJsonApiJob) << "Set body for request:" << _body;
+    if (!_body.isEmpty()) {
+        _request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    }
+}
+
+
+void JsonApiJob::setVerb(Verb value)
+{
+    _verb = value;
+}
+
+
+QByteArray JsonApiJob::verbToString() const
+{
+    switch (_verb) {
+    case Verb::Get:
+        return "GET";
+    case Verb::Post:
+        return "POST";
+    case Verb::Put:
+        return "PUT";
+    case Verb::Delete:
+        return "DELETE";
+    }
+    return "GET";
+}
+
 void JsonApiJob::start()
 {
     addRawHeader("OCS-APIREQUEST", "true");
     auto query = _additionalParams;
     query.addQueryItem(QLatin1String("format"), QLatin1String("json"));
     QUrl url = Utility::concatUrlPath(account()->url(), path(), query);
-    sendRequest("GET", url, _request);
+    const auto httpVerb = verbToString();
+    if (!_body.isEmpty()) {
+        sendRequest(httpVerb, url, _request, _body);
+    } else {
+        sendRequest(httpVerb, url, _request);
+    }
     AbstractNetworkJob::start();
 }
 
@@ -829,7 +901,7 @@ bool JsonApiJob::finished()
         qCWarning(lcJsonApiJob) << "Nothing changed so nothing to retrieve - status code: " << httpStatusCode;
         statusCode = httpStatusCode;
     } else {
-        QRegExp rex("\"statuscode\":(\\d+),");
+        QRegExp rex(R"("statuscode":(\d+),)");
         // example: "{"ocs":{"meta":{"status":"ok","statuscode":100,"message":null},"data":{"version":{"major":8,"minor":"... (504)
         if (jsonStr.contains(rex)) {
             statusCode = rex.cap(1).toInt();
@@ -839,6 +911,11 @@ bool JsonApiJob::finished()
     // save new ETag value
     if(reply()->rawHeaderList().contains("ETag"))
         emit etagResponseHeaderReceived(reply()->rawHeader("ETag"), statusCode);
+
+    const auto desktopNotificationsAllowed = reply()->rawHeader(QByteArray("X-Nextcloud-User-Status"));
+    if(!desktopNotificationsAllowed.isEmpty()) {
+        emit allowDesktopNotificationsChanged(desktopNotificationsAllowed == "online");
+    }
 
     QJsonParseError error;
     auto json = QJsonDocument::fromJson(jsonStr.toUtf8(), &error);
@@ -869,65 +946,113 @@ void DetermineAuthTypeJob::start()
     req.setAttribute(HttpCredentials::DontAddCredentialsAttribute, true);
     // Don't reuse previous auth credentials
     req.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
-    // Don't send cookies, we can't determine the auth type if we're logged in
-    req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
 
-    // Start two parallel requests, one determines whether it's a shib server
-    // and the other checks the HTTP auth method.
-    auto get = _account->sendRequest("GET", _account->davUrl(), req);
+    // Start three parallel requests
+
+    // 1. determines whether it's a basic auth server
+    auto get = _account->sendRequest("GET", _account->url(), req);
+
+    // 2. checks the HTTP auth method.
     auto propfind = _account->sendRequest("PROPFIND", _account->davUrl(), req);
+
+    // 3. Determines if the old flow has to be used (GS for now)
+    auto oldFlowRequired = new JsonApiJob(_account, "/ocs/v2.php/cloud/capabilities", this);
+
     get->setTimeout(30 * 1000);
     propfind->setTimeout(30 * 1000);
+    oldFlowRequired->setTimeout(30 * 1000);
     get->setIgnoreCredentialFailure(true);
     propfind->setIgnoreCredentialFailure(true);
+    oldFlowRequired->setIgnoreCredentialFailure(true);
 
-    connect(get, &AbstractNetworkJob::redirected, this, [this, get](QNetworkReply *, const QUrl &target, int) {
-#ifndef NO_SHIBBOLETH
-        QRegExp shibbolethyWords("SAML|wayf");
-        shibbolethyWords.setCaseSensitivity(Qt::CaseInsensitive);
-        if (target.toString().contains(shibbolethyWords)) {
-            _resultGet = Shibboleth;
-            get->setFollowRedirects(false);
+    connect(get, &SimpleNetworkJob::finishedSignal, this, [this, get]() {
+        if (get->reply()->error() == QNetworkReply::AuthenticationRequiredError) {
+            _resultGet = Basic;
+        } else {
+            _resultGet = LoginFlowV2;
         }
-#else
-        Q_UNUSED(this)
-        Q_UNUSED(get)
-        Q_UNUSED(target)
-#endif
-    });
-    connect(get, &SimpleNetworkJob::finishedSignal, this, [this]() {
         _getDone = true;
-        checkBothDone();
+        checkAllDone();
     });
     connect(propfind, &SimpleNetworkJob::finishedSignal, this, [this](QNetworkReply *reply) {
         auto authChallenge = reply->rawHeader("WWW-Authenticate").toLower();
         if (authChallenge.contains("bearer ")) {
             _resultPropfind = OAuth;
-        } else if (authChallenge.isEmpty()) {
-            qCWarning(lcDetermineAuthTypeJob) << "Did not receive WWW-Authenticate reply to auth-test PROPFIND";
+        } else {
+            if (authChallenge.isEmpty()) {
+                qCWarning(lcDetermineAuthTypeJob) << "Did not receive WWW-Authenticate reply to auth-test PROPFIND";
+            } else {
+                qCWarning(lcDetermineAuthTypeJob) << "Unknown WWW-Authenticate reply to auth-test PROPFIND:" << authChallenge;
+            }
+            _resultPropfind = Basic;
         }
         _propfindDone = true;
-        checkBothDone();
+        checkAllDone();
     });
+    connect(oldFlowRequired, &JsonApiJob::jsonReceived, this, [this](const QJsonDocument &json, int statusCode) {
+        if (statusCode == 200) {
+            _resultOldFlow = LoginFlowV2;
+
+            auto data = json.object().value("ocs").toObject().value("data").toObject().value("capabilities").toObject();
+            auto gs = data.value("globalscale");
+            if (gs != QJsonValue::Undefined) {
+                auto flow = gs.toObject().value("desktoplogin");
+                if (flow != QJsonValue::Undefined) {
+                    if (flow.toInt() == 1) {
+#ifdef WITH_WEBENGINE
+                        _resultOldFlow = WebViewFlow;
+#else // WITH_WEBENGINE
+                        qCWarning(lcDetermineAuthTypeJob) << "Server does only support flow1, but this client was compiled without support for flow1";
+#endif // WITH_WEBENGINE
+                    }
+                }
+            }
+        } else {
+            _resultOldFlow = Basic;
+        }
+        _oldFlowDone = true;
+        checkAllDone();
+    });
+
+    oldFlowRequired->start();
 }
 
-void DetermineAuthTypeJob::checkBothDone()
+void DetermineAuthTypeJob::checkAllDone()
 {
-    if (!_getDone || !_propfindDone)
+    // Do not conitunue until eve
+    if (!_getDone || !_propfindDone || !_oldFlowDone) {
         return;
-    auto result = _resultPropfind;
-    // OAuth > Shib > Basic
-    if (_resultGet == Shibboleth && result != OAuth)
-        result = Shibboleth;
+    }
 
-    // WebViewFlow > OAuth > Shib > Basic
+    Q_ASSERT(_resultGet != NoAuthType);
+    Q_ASSERT(_resultPropfind != NoAuthType);
+    Q_ASSERT(_resultOldFlow != NoAuthType);
+
+    auto result = _resultPropfind;
+
+#ifdef WITH_WEBENGINE
+    // WebViewFlow > OAuth > Basic
     if (_account->serverVersionInt() >= Account::makeServerVersion(12, 0, 0)) {
         result = WebViewFlow;
     }
+#endif // WITH_WEBENGINE
 
-    // LoginFlowV2 > WebViewFlow > OAuth > Shib > Basic
+    // LoginFlowV2 > WebViewFlow > OAuth > Basic
     if (_account->serverVersionInt() >= Account::makeServerVersion(16, 0, 0)) {
         result = LoginFlowV2;
+    }
+
+#ifdef WITH_WEBENGINE
+    // If we determined that we need the webview flow (GS for example) then we switch to that
+    if (_resultOldFlow == WebViewFlow) {
+        result = WebViewFlow;
+    }
+#endif // WITH_WEBENGINE
+
+    // If we determined that a simple get gave us an authentication required error
+    // then the server enforces basic auth and we got no choice but to use this
+    if (_resultGet == Basic) {
+        result = Basic;
     }
 
     qCInfo(lcDetermineAuthTypeJob) << "Auth type for" << _account->davUrl() << "is" << result;
@@ -988,7 +1113,7 @@ bool DeleteApiJob::finished()
     const auto replyData = QString::fromUtf8(reply()->readAll());
     qCInfo(lcJsonApiJob()) << "TMX Delete Job" << replyData;
     emit result(httpStatus);
-		return true;
+    return true;
 }
 
 void fetchPrivateLinkUrl(AccountPtr account, const QString &remotePath,
@@ -1000,7 +1125,7 @@ void fetchPrivateLinkUrl(AccountPtr account, const QString &remotePath,
         oldUrl = account->deprecatedPrivateLinkUrl(numericFileId).toString(QUrl::FullyEncoded);
 
     // Retrieve the new link by PROPFIND
-    PropfindJob *job = new PropfindJob(account, remotePath, target);
+    auto *job = new PropfindJob(account, remotePath, target);
     job->setProperties(
         QList<QByteArray>()
         << "http://owncloud.org/ns:fileid" // numeric file id for fallback private link generation
@@ -1024,4 +1149,3 @@ void fetchPrivateLinkUrl(AccountPtr account, const QString &remotePath,
 }
 
 } // namespace OCC
-

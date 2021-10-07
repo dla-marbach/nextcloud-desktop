@@ -18,11 +18,27 @@
 #include <libcrashreporter-gui/CrashReporter.h>
 
 #include <QApplication>
+#include <QDir>
 #include <QDebug>
+#include <QFileInfo>
 
 int main(int argc, char *argv[])
 {
+    QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps, true);
+#ifdef Q_OS_WIN
+    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling, true);
+#endif // !Q_OS_WIN
     QApplication app(argc, argv);
+
+#ifdef Q_OS_WIN
+    // The Windows style still has pixelated elements with Qt 5.6,
+    // it's recommended to use the Fusion style in this case, even
+    // though it looks slightly less native. Check here after the
+    // QApplication was constructed, but before any QWidget is
+    // constructed.
+    if (app.devicePixelRatio() > 1)
+        QApplication::setStyle(QStringLiteral("fusion"));
+#endif // Q_OS_WIN
 
     if (app.arguments().size() != 2) {
         qDebug() << "You need to pass the .dmp file path as only argument";
@@ -37,6 +53,14 @@ int main(int argc, char *argv[])
 #endif
     reporter.setWindowTitle(CRASHREPORTER_PRODUCT_NAME);
     reporter.setText("<html><head/><body><p><span style=\" font-weight:600;\">Sorry!</span> " CRASHREPORTER_PRODUCT_NAME " crashed. Please tell us about it! " CRASHREPORTER_PRODUCT_NAME " has created an error report for you that can help improve the stability in the future. You can now send this report directly to the " CRASHREPORTER_PRODUCT_NAME " developers.</p></body></html>");
+
+    const QFileInfo crashLog(QDir::tempPath() + QStringLiteral("/" CRASHREPORTER_PRODUCT_NAME "-crash.log"));
+    if (crashLog.exists()) {
+        QFile inFile(crashLog.filePath());
+        if (inFile.open(QFile::ReadOnly)) {
+            reporter.setComment(inFile.readAll());
+        }
+    }
 
     reporter.setReportData("BuildID", CRASHREPORTER_BUILD_ID);
     reporter.setReportData("ProductName", CRASHREPORTER_PRODUCT_NAME);

@@ -61,6 +61,14 @@ public:
      */
     void setExpireDate(const QString &shareId, const QDate &date);
 
+	 /**
+     * Set note a share
+     *
+     * @param note The note to a share, if the note is empty the
+     * share will be removed
+     */
+    void setNote(const QString &shareId, const QString &note);
+
     /**
      * Set the password of a share
      *
@@ -88,6 +96,11 @@ public:
      */
     void setPermissions(const QString &shareId,
         const Share::Permissions permissions);
+    
+    /**
+     * Set share link label
+     */
+    void setLabel(const QString &shareId, const QString &label);
 
     /**
      * Create a new link share
@@ -105,11 +118,13 @@ public:
      * @param shareType The type of share (user/group/link/federated)
      * @param shareWith The uid/gid/federated id to share with
      * @param permissions The permissions the share will have
+     * @param password The password to protect the share with
      */
     void createShare(const QString &path,
         const Share::ShareType shareType,
         const QString &shareWith = "",
-        const Share::Permissions permissions = SharePermissionRead);
+        const Share::Permissions permissions = SharePermissionRead,
+        const QString &password = "");
 
     /**
      * Returns information on the items shared with the current user.

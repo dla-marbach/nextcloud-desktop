@@ -18,21 +18,24 @@
 
 #include <QDir>
 #include <QStringList>
-#include <QThread>
+#include <QtGlobal>
+#include <QTextCodec>
 #include <qmetaobject.h>
 
+#include <iostream>
+
+#ifdef ZLIB_FOUND
 #include <zlib.h>
+#endif
 
-namespace OCC {
+#ifdef Q_OS_WIN
+#include <io.h> // for stdout
+#endif
 
-static void mirallLogCatcher(QtMsgType type, const QMessageLogContext &ctx, const QString &message)
-{
-    auto logger = Logger::instance();
-    if (!logger->isNoop()) {
-        logger->doLog(qFormatLogMessage(type, ctx, message));
-    }
+namespace {
+constexpr int CrashLogSize = 20;
 }
-
+namespace OCC {
 
 Logger *Logger::instance()
 {
@@ -42,24 +45,20 @@ Logger *Logger::instance()
 
 Logger::Logger(QObject *parent)
     : QObject(parent)
-    , _showTime(true)
-    , _logWindowActivated(false)
-    , _doFileFlush(false)
-    , _logExpire(0)
-    , _logDebug(false)
 {
-    qSetMessagePattern("[%{function} \t%{message}");
+    qSetMessagePattern(QStringLiteral("%{time yyyy-MM-dd hh:mm:ss:zzz} [ %{type} %{category} ]%{if-debug}\t[ %{function} ]%{endif}:\t%{message}"));
+    _crashLog.resize(CrashLogSize);
 #ifndef NO_MSG_HANDLER
-   qInstallMessageHandler(mirallLogCatcher);
-#else
-    Q_UNUSED(mirallLogCatcher)
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &ctx, const QString &message) {
+            Logger::instance()->doLog(type, ctx, message);
+        });
 #endif
 }
 
 Logger::~Logger()
 {
 #ifndef NO_MSG_HANDLER
-    qInstallMessageHandler(0);
+    qInstallMessageHandler(nullptr);
 #endif
 }
 
@@ -79,62 +78,49 @@ void Logger::postGuiMessage(const QString &title, const QString &message)
     emit guiMessage(title, message);
 }
 
-void Logger::log(Log log)
-{
-    QString msg;
-    if (_showTime) {
-        msg = log.timeStamp.toString(QLatin1String("MM-dd hh:mm:ss:zzz")) + QLatin1Char(' ');
-    }
-
-    msg += QString().sprintf("%p ", (void *)QThread::currentThread());
-    msg += log.message;
-    // _logs.append(log);
-    // std::cout << qPrintable(log.message) << std::endl;
-
-    doLog(msg);
-}
-
-/**
- * Returns true if doLog does nothing and need not to be called
- */
-bool Logger::isNoop() const
-{
-    QMutexLocker lock(&_mutex);
-    return !_logstream && !_logWindowActivated;
-}
-
 bool Logger::isLoggingToFile() const
 {
     QMutexLocker lock(&_mutex);
     return _logstream;
 }
 
-void Logger::doLog(const QString &msg)
+void Logger::doLog(QtMsgType type, const QMessageLogContext &ctx, const QString &message)
 {
+    const QString msg = qFormatLogMessage(type, ctx, message);
     {
         QMutexLocker lock(&_mutex);
+        _crashLogIndex = (_crashLogIndex + 1) % CrashLogSize;
+        _crashLog[_crashLogIndex] = msg;
         if (_logstream) {
-            (*_logstream) << msg << endl;
+            (*_logstream) << msg << Qt::endl;
             if (_doFileFlush)
                 _logstream->flush();
+        }
+        if (type == QtFatalMsg) {
+            close();
+#if defined(Q_OS_WIN)
+            // Make application terminate in a way that can be caught by the crash reporter
+            Utility::crash();
+#endif
         }
     }
     emit logWindowLog(msg);
 }
 
-void Logger::mirallLog(const QString &message)
+void Logger::close()
 {
-    Log log_;
-    log_.timeStamp = QDateTime::currentDateTimeUtc();
-    log_.message = message;
-
-    Logger::instance()->log(log_);
+    dumpCrashLog();
+    if (_logstream)
+    {
+        _logstream->flush();
+        _logFile.close();
+        _logstream.reset();
+    }
 }
 
-void Logger::setLogWindowActivated(bool activated)
+QString Logger::logFile() const
 {
-    QMutexLocker locker(&_mutex);
-    _logWindowActivated = activated;
+    return _logFile.fileName();
 }
 
 void Logger::setLogFile(const QString &name)
@@ -151,7 +137,7 @@ void Logger::setLogFile(const QString &name)
 
     bool openSucceeded = false;
     if (name == QLatin1String("-")) {
-        openSucceeded = _logFile.open(1, QIODevice::WriteOnly);
+        openSucceeded = _logFile.open(stdout, QIODevice::WriteOnly);
     } else {
         _logFile.setFileName(name);
         openSucceeded = _logFile.open(QIODevice::WriteOnly);
@@ -160,18 +146,24 @@ void Logger::setLogFile(const QString &name)
     if (!openSucceeded) {
         locker.unlock(); // Just in case postGuiMessage has a qDebug()
         postGuiMessage(tr("Error"),
-            QString(tr("<nobr>File '%1'<br/>cannot be opened for writing.<br/><br/>"
-                       "The log output can <b>not</b> be saved!</nobr>"))
+            QString(tr("<nobr>File \"%1\"<br/>cannot be opened for writing.<br/><br/>"
+                       "The log output <b>cannot</b> be saved!</nobr>"))
                 .arg(name));
         return;
     }
 
     _logstream.reset(new QTextStream(&_logFile));
+    _logstream->setCodec(QTextCodec::codecForName("UTF-8"));
 }
 
 void Logger::setLogExpire(int expire)
 {
     _logExpire = expire;
+}
+
+QString Logger::logDir() const
+{
+    return _logDirectory;
 }
 
 void Logger::setLogDir(const QString &dir)
@@ -186,14 +178,18 @@ void Logger::setLogFlush(bool flush)
 
 void Logger::setLogDebug(bool debug)
 {
-    QLoggingCategory::setFilterRules(debug ? QStringLiteral("sync.*.debug=true\ngui.*.debug=true") : QString());
+    const QSet<QString> rules = {debug ? QStringLiteral("nextcloud.*.debug=true") : QString()};
+    if (debug) {
+        addLogRule(rules);
+    } else {
+        removeLogRule(rules);
+    }
     _logDebug = debug;
 }
 
 QString Logger::temporaryFolderLogDirPath() const
 {
-    QString dirName = APPLICATION_SHORTNAME + QString("-logdir");
-    return QDir::temp().filePath(dirName);
+    return QDir::temp().filePath(QStringLiteral(APPLICATION_SHORTNAME "-logdir"));
 }
 
 void Logger::setupTemporaryFolderLogDir()
@@ -219,8 +215,32 @@ void Logger::disableTemporaryFolderLogDir()
     _temporaryFolderLogDir = false;
 }
 
+void Logger::setLogRules(const QSet<QString> &rules)
+{
+    _logRules = rules;
+    QString tmp;
+    QTextStream out(&tmp);
+    for (const auto &p : rules) {
+        out << p << QLatin1Char('\n');
+    }
+    qDebug() << tmp;
+    QLoggingCategory::setFilterRules(tmp);
+}
+
+void Logger::dumpCrashLog()
+{
+    QFile logFile(QDir::tempPath() + QStringLiteral("/" APPLICATION_NAME "-crash.log"));
+    if (logFile.open(QFile::WriteOnly)) {
+        QTextStream out(&logFile);
+        for (int i = 1; i <= CrashLogSize; ++i) {
+            out << _crashLog[(_crashLogIndex + i) % CrashLogSize] << QLatin1Char('\n');
+        }
+    }
+}
+
 static bool compressLog(const QString &originalName, const QString &targetName)
 {
+#ifdef ZLIB_FOUND
     QFile original(originalName);
     if (!original.open(QIODevice::ReadOnly))
         return false;
@@ -239,6 +259,9 @@ static bool compressLog(const QString &originalName, const QString &targetName)
     }
     gzclose(compressed);
     return true;
+#else
+    return false;
+#endif
 }
 
 void Logger::enterNextLogFile()
@@ -256,7 +279,7 @@ void Logger::enterNextLogFile()
 
         // Expire old log files and deal with conflicts
         QStringList files = dir.entryList(QStringList("*owncloud.log.*"),
-            QDir::Files);
+            QDir::Files, QDir::Name);
         QRegExp rx(R"(.*owncloud\.log\.(\d+).*)");
         int maxNumber = -1;
         foreach (const QString &s, files) {
@@ -275,10 +298,15 @@ void Logger::enterNextLogFile()
         auto previousLog = _logFile.fileName();
         setLogFile(dir.filePath(newLogName));
 
-        if (!previousLog.isEmpty()) {
-            QString compressedName = previousLog + ".gz";
-            if (compressLog(previousLog, compressedName)) {
-                QFile::remove(previousLog);
+        // Compress the previous log file. On a restart this can be the most recent
+        // log file.
+        auto logToCompress = previousLog;
+        if (logToCompress.isEmpty() && files.size() > 0 && !files.last().endsWith(".gz"))
+            logToCompress = dir.absoluteFilePath(files.last());
+        if (!logToCompress.isEmpty()) {
+            QString compressedName = logToCompress + ".gz";
+            if (compressLog(logToCompress, compressedName)) {
+                QFile::remove(logToCompress);
             } else {
                 QFile::remove(compressedName);
             }

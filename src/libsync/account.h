@@ -41,15 +41,21 @@ class QNetworkReply;
 class QUrl;
 class QNetworkAccessManager;
 
+namespace QKeychain {
+class Job;
+class WritePasswordJob;
+class ReadPasswordJob;
+}
+
 namespace OCC {
 
 class AbstractCredentials;
 class Account;
-typedef QSharedPointer<Account> AccountPtr;
-class QuotaInfo;
+using AccountPtr = QSharedPointer<Account>;
 class AccessManager;
 class SimpleNetworkJob;
-
+class PushNotifications;
+class UserStatusConnector;
 
 /**
  * @brief Reimplement this to handle SSL errors from libsync
@@ -58,7 +64,7 @@ class SimpleNetworkJob;
 class AbstractSslErrorHandler
 {
 public:
-    virtual ~AbstractSslErrorHandler() {}
+    virtual ~AbstractSslErrorHandler() = default;
     virtual bool handleErrors(QList<QSslError>, const QSslConfiguration &conf, QList<QSslCertificate> *, AccountPtr) = 0;
 };
 
@@ -72,9 +78,14 @@ public:
 class OWNCLOUDSYNC_EXPORT Account : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(QString id MEMBER _id)
+    Q_PROPERTY(QString davUser MEMBER _davUser)
+    Q_PROPERTY(QString displayName MEMBER _displayName)
+    Q_PROPERTY(QUrl url MEMBER _url)
+
 public:
     static AccountPtr create();
-    ~Account();
+    ~Account() override;
 
     AccountPtr sharedFromThis();
 
@@ -114,8 +125,6 @@ public:
      * @returns the (themeable) dav path for the account.
      */
     QString davPath() const;
-    void setDavPath(const QString &s) { _davPath = s; }
-    void setNonShib(bool nonShib);
 
     /** Returns webdav entry URL, based on url() */
     QUrl davUrl() const;
@@ -141,6 +150,9 @@ public:
         const QUrl &url,
         QNetworkRequest req = QNetworkRequest(),
         QIODevice *data = nullptr);
+
+    QNetworkReply *sendRawRequest(const QByteArray &verb,
+        const QUrl &url, QNetworkRequest req, const QByteArray &data);
 
     /** Create and start network job for a simple one-off request.
      *
@@ -215,10 +227,6 @@ public:
      */
     bool serverVersionUnsupported() const;
 
-    // Fixed from 8.1 https://github.com/owncloud/client/issues/3730
-    /** Detects a specific bug in older server versions */
-    bool rootEtagChangesNotOnlySubFolderEtags();
-
     /** True when the server connection is using HTTP2  */
     bool isHttp2Supported() { return _http2Supported; }
     void setHttp2Supported(bool value) { _http2Supported = value; }
@@ -235,6 +243,24 @@ public:
     void handleInvalidCredentials();
 
     ClientSideEncryption* e2e();
+
+    /// Used in RemoteWipe
+    void retrieveAppPassword();
+    void writeAppPasswordOnce(QString appPassword);
+    void deleteAppPassword();
+
+    void deleteAppToken();
+
+    /// Direct Editing
+    // Check for the directEditing capability
+    void fetchDirectEditors(const QUrl &directEditingURL, const QString &directEditingETag);
+
+    void setupUserStatusConnector();
+    void trySetupPushNotifications();
+    PushNotifications *pushNotifications() const;
+    void setPushNotificationsReconnectInterval(int interval);
+
+    std::shared_ptr<UserStatusConnector> userStatusConnector() const;
 
 public slots:
     /// Used when forgetting credentials
@@ -262,18 +288,30 @@ signals:
     void accountChangedAvatar();
     void accountChangedDisplayName();
 
+    /// Used in RemoteWipe
+    void appPasswordRetrieved(QString);
+
+    void pushNotificationsReady(Account *account);
+    void pushNotificationsDisabled(Account *account);
+
+    void userStatusChanged();
+
 protected Q_SLOTS:
     void slotCredentialsFetched();
     void slotCredentialsAsked();
+    void slotDirectEditingRecieved(const QJsonDocument &json);
 
 private:
     Account(QObject *parent = nullptr);
     void setSharedThis(AccountPtr sharedThis);
 
+    static QString davPathBase();
+
     QWeakPointer<Account> _sharedThis;
     QString _id;
     QString _davUser;
     QString _displayName;
+    QTimer _pushNotificationsReconnectTimer;
 #ifndef TOKEN_AUTH_ONLY
     QImage _avatarImg;
 #endif
@@ -293,7 +331,6 @@ private:
     Capabilities _capabilities;
     QString _serverVersion;
     QScopedPointer<AbstractSslErrorHandler> _sslErrorHandler;
-    QuotaInfo *_quotaInfo;
     QSharedPointer<QNetworkAccessManager> _am;
     QScopedPointer<AbstractCredentials> _credentials;
     bool _http2Supported = false;
@@ -303,13 +340,39 @@ private:
 
     static QString _configFileName;
 
-    QString _davPath; // defaults to value from theme, might be overwritten in brandings
     ClientSideEncryption _e2e;
 
+    /// Used in RemoteWipe
+    bool _wroteAppPassword = false;
+
     friend class AccountManager;
+
+    // Direct Editing
+    QString _lastDirectEditingETag;
+
+    PushNotifications *_pushNotifications = nullptr;
+
+    std::shared_ptr<UserStatusConnector> _userStatusConnector;
+
+    /* IMPORTANT - remove later - FIXME MS@2019-12-07 -->
+     * TODO: For "Log out" & "Remove account": Remove client CA certs and KEY!
+     *
+     *       Disabled as long as selecting another cert is not supported by the UI.
+     *
+     *       Being able to specify a new certificate is important anyway: expiry etc.
+     *
+     *       We introduce this dirty hack here, to allow deleting them upon Remote Wipe.
+    */
+    public:
+        void setRemoteWipeRequested_HACK() { _isRemoteWipeRequested_HACK = true; }
+        bool isRemoteWipeRequested_HACK() { return _isRemoteWipeRequested_HACK; }
+    private:
+        bool _isRemoteWipeRequested_HACK = false;
+    // <-- FIXME MS@2019-12-07
 };
 }
 
 Q_DECLARE_METATYPE(OCC::AccountPtr)
+Q_DECLARE_METATYPE(OCC::Account *)
 
 #endif //SERVERCONNECTION_H

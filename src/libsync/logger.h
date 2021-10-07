@@ -23,16 +23,9 @@
 #include <qmutex.h>
 
 #include "common/utility.h"
-#include "logger.h"
 #include "owncloudlib.h"
 
 namespace OCC {
-
-struct Log
-{
-    QDateTime timeStamp;
-    QString message;
-};
 
 /**
  * @brief The Logger class
@@ -42,15 +35,9 @@ class OWNCLOUDSYNC_EXPORT Logger : public QObject
 {
     Q_OBJECT
 public:
-    bool isNoop() const;
     bool isLoggingToFile() const;
 
-    void log(Log log);
-    void doLog(const QString &log);
-
-    static void mirallLog(const QString &message);
-
-    const QList<Log> &logs() const { return _logs; }
+    void doLog(QtMsgType type, const QMessageLogContext &ctx, const QString &message);
 
     static Logger *instance();
 
@@ -58,10 +45,14 @@ public:
     void postOptionalGuiLog(const QString &title, const QString &message);
     void postGuiMessage(const QString &title, const QString &message);
 
-    void setLogWindowActivated(bool activated);
+    QString logFile() const;
     void setLogFile(const QString &name);
+
     void setLogExpire(int expire);
+
+    QString logDir() const;
     void setLogDir(const QString &dir);
+
     void setLogFlush(bool flush);
 
     bool logDebug() const { return _logDebug; }
@@ -83,6 +74,14 @@ public:
     /** For switching off via logwindow */
     void disableTemporaryFolderLogDir();
 
+    void addLogRule(const QSet<QString> &rules) {
+        setLogRules(_logRules + rules);
+    }
+    void removeLogRule(const QSet<QString> &rules) {
+        setLogRules(_logRules - rules);
+    }
+    void setLogRules(const QSet<QString> &rules);
+
 signals:
     void logWindowLog(const QString &);
 
@@ -95,18 +94,22 @@ public slots:
 
 private:
     Logger(QObject *parent = nullptr);
-    ~Logger();
-    QList<Log> _logs;
-    bool _showTime;
-    bool _logWindowActivated;
+    ~Logger() override;
+
+    void close();
+    void dumpCrashLog();
+
     QFile _logFile;
-    bool _doFileFlush;
-    int _logExpire;
-    bool _logDebug;
+    bool _doFileFlush = false;
+    int _logExpire = 0;
+    bool _logDebug = false;
     QScopedPointer<QTextStream> _logstream;
     mutable QMutex _mutex;
     QString _logDirectory;
     bool _temporaryFolderLogDir = false;
+    QSet<QString> _logRules;
+    QVector<QString> _crashLog;
+    int _crashLogIndex = 0;
 };
 
 } // namespace OCC

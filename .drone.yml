@@ -1,314 +1,93 @@
 kind: pipeline
-name: qt-5.7
+name: qt-5.15
 
 steps:
-- name: build and test
-  image: nextcloudci/client-5.7:client-5.7-4
+- name: cmake
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
   commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      source /opt/qt57/bin/qt57-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      source /opt/qt57/bin/qt57-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1  ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
+    - cd /drone/build
+    - cmake -DCMAKE_C_COMPILER=gcc-10 -DCMAKE_CXX_COMPILER=g++-10 -DCMAKE_BUILD_TYPE=Debug -DBUILD_UPDATER=ON -DBUILD_TESTING=1 -DECM_ENABLE_SANITIZERS=address -DCMAKE_CXX_FLAGS=-Werror ../src
+- name: compile
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
+  commands:
+    - cd /drone/build
+    - make -j$(nproc)
+- name: test
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
+  commands:
+    - cd /drone/build
+    - useradd -m -s /bin/bash test
+    - chown -R test:test .
+    - su -c 'ASAN_OPTIONS=detect_leaks=0 xvfb-run ctest --output-on-failure' test
+
+volumes:
+- name: build
+  temp: {}
+
 trigger:
   branch:
     - master
+    - stable-*
   event:
     - pull_request
     - push
 
 ---
 kind: pipeline
-name: qt-5.8
+name: qt-5.15-clang
 
 steps:
-- name: build and test
-  image: nextcloudci/client-5.8:client-5.8-4
+- name: cmake
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
   commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      source /opt/qt58/bin/qt58-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      source /opt/qt58/bin/qt58-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1  ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
+    - cd /drone/build
+    - cmake -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER=clang-10 -DCMAKE_CXX_COMPILER=clang++-10 -DCMAKE_BUILD_TYPE=Debug -DBUILD_UPDATER=ON -DBUILD_TESTING=1 -DECM_ENABLE_SANITIZERS=address -DCMAKE_CXX_FLAGS=-Werror ../src
+- name: compile
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
+  commands:
+    - cd /drone/build
+    - ninja
+- name: test
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
+  commands:
+    - cd /drone/build
+    - useradd -m -s /bin/bash test
+    - chown -R test:test .
+    - su -c 'ASAN_OPTIONS=detect_leaks=0 xvfb-run ctest --output-on-failure' test
+- name: clang-tidy
+  image: ghcr.io/nextcloud/continuous-integration-client:client-5.15-2
+  volumes:
+    - name: build
+      path: /drone/build
+  commands:
+    - "! run-clang-tidy-10 -j$(nproc) -p /drone/build -header-filter $PWD -quiet | grep -A 5 ': error:'"
+
+volumes:
+- name: build
+  temp: {}
+
 trigger:
   branch:
     - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.9
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.9:client-5.9-5
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      source /opt/qt59/bin/qt59-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      source /opt/qt59/bin/qt59-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1  ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.10
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.10:client-5.10-3
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt510/bin/qt510-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt510/bin/qt510-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1 ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.11
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.11:client-5.11-3
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt511/bin/qt511-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt511/bin/qt511-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1 ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.11-clang
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.11:client-5.11-3
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      export CC=clang-6.0 &&
-      export CXX=clang++-6.0 &&
-      source /opt/qt511/bin/qt511-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      export CC=clang-6.0 &&
-      export CXX=clang++-6.0 &&
-      source /opt/qt511/bin/qt511-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1 ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.12
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.12:client-5.12-2
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt512/bin/qt512-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      export CC=gcc-7 &&
-      export CXX=g++-7 &&
-      source /opt/qt512/bin/qt512-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1 ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
-  event:
-    - pull_request
-    - push
-
----
-kind: pipeline
-name: qt-5.12-clang
-
-steps:
-- name: build and test
-  image: nextcloudci/client-5.12:client-5.12-2
-  commands:
-    # Install QtKeyChain
-    - /bin/bash -c "
-      export CC=clang-6.0 &&
-      export CXX=clang++-6.0 &&
-      source /opt/qt512/bin/qt512-env.sh &&
-      cd /tmp &&
-      git clone https://github.com/frankosterfeld/qtkeychain.git &&
-      cd qtkeychain &&
-      git checkout v0.9.1 &&
-      mkdir build &&
-      cd build &&
-      cmake ../ &&
-      make &&
-      make install"
-    # Build client
-    - /bin/bash -c "
-      export CC=clang-6.0 &&
-      export CXX=clang++-6.0 &&
-      source /opt/qt512/bin/qt512-env.sh &&
-      mkdir build &&
-      cd build &&
-      cmake -D NO_SHIBBOLETH=1 -DCMAKE_BUILD_TYPE=Debug -DUNIT_TESTING=1 ../ &&
-      make &&
-      useradd -m -s /bin/bash test &&
-      chown -R test:test . &&
-      su -c 'ctest --output-on-failure' test"
-trigger:
-  branch:
-    - master
+    - stable-*
   event:
     - pull_request
     - push
@@ -319,12 +98,19 @@ name: AppImage
 
 steps:
 - name: build
-  image: nextcloudci/client-5.12:client-5.12-2
+  image: ghcr.io/nextcloud/continuous-integration-client-appimage:client-appimage-2
+  environment:
+    CI_UPLOAD_GIT_TOKEN:
+      from_secret: CI_UPLOAD_GIT_TOKEN
+    CI_UPLOAD_GIT_USERNAME:
+      from_secret: CI_UPLOAD_GIT_USERNAME
   commands:
-    - /bin/bash -c "./admin/linux/build-appimage.sh"
+    - BUILDNR=$DRONE_BUILD_NUMBER VERSION_SUFFIX=$DRONE_PULL_REQUEST BUILD_UPDATER=ON DESKTOP_CLIENT_ROOT=$DRONE_WORKSPACE /bin/bash -c "./admin/linux/build-appimage.sh"
+    - /bin/bash -c "./admin/linux/upload-appimage.sh" || echo "Upload failed, however this is an optional step."
 trigger:
   branch:
     - master
+    - stable-*
   event:
     - pull_request
     - push
@@ -334,9 +120,9 @@ name: Debian
 
 steps:
 - name: build
-  image: nextcloudci/client-debian-ci:client-debian-ci-2
+  image: ghcr.io/nextcloud/continuous-integration-client-debian:client-debian-3
   commands:
-    - /bin/bash -c "./admin/linux/debian/drone-build.sh"
+    - /bin/bash -c "./admin/linux/debian/drone-build.sh" || echo "[WARNING] Debian build failed but this is a non-blocking CI event"
   environment:
     DEBIAN_SECRET_KEY:
       from_secret: DEBIAN_SECRET_KEY

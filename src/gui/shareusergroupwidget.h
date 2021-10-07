@@ -16,7 +16,9 @@
 #define SHAREUSERGROUPWIDGET_H
 
 #include "accountfwd.h"
+#include "sharemanager.h"
 #include "sharepermissions.h"
+#include "sharee.h"
 #include "QProgressIndicator.h"
 #include <QDialog>
 #include <QWidget>
@@ -38,12 +40,9 @@ namespace Ui {
 }
 
 class AbstractCredentials;
-class QuotaInfo;
 class SyncResult;
 class Share;
-class Sharee;
 class ShareManager;
-class ShareeModel;
 
 /**
  * @brief The ShareDialog (user/group) class
@@ -60,19 +59,22 @@ public:
         SharePermissions maxSharingPermissions,
         const QString &privateLinkUrl,
         QWidget *parent = nullptr);
-    ~ShareUserGroupWidget();
+    ~ShareUserGroupWidget() override;
 
 signals:
     void togglePublicLinkShare(bool);
+    void styleChanged();
 
 public slots:
     void getShares();
+    void slotShareCreated(const QSharedPointer<Share> &share);
+    void slotStyleChanged();
 
 private slots:
     void slotSharesFetched(const QList<QSharedPointer<Share>> &shares);
 
     void on_shareeLineEdit_textChanged(const QString &text);
-    void searchForSharees();
+    void searchForSharees(ShareeModel::LookupMode lookupMode);
     void slotLineEditTextEdited(const QString &text);
 
     void slotLineEditReturn();
@@ -88,6 +90,10 @@ private slots:
     void slotPrivateLinkEmail();
 
 private:
+    void customizeStyle();
+
+    void activateShareeLineEdit();
+
     Ui::ShareUserGroupWidget *_ui;
     QScrollArea *_parentScrollArea;
     AccountPtr _account;
@@ -105,6 +111,8 @@ private:
     ShareManager *_manager;
 
     QProgressIndicator _pi_sharee;
+
+    QString _lastCreatedShareId;
 };
 
 /**
@@ -115,11 +123,12 @@ class ShareUserLine : public QWidget
     Q_OBJECT
 
 public:
-    explicit ShareUserLine(QSharedPointer<Share> Share,
+    explicit ShareUserLine(AccountPtr account,
+        QSharedPointer<UserGroupShare> Share,
         SharePermissions maxSharingPermissions,
         bool isFile,
         QWidget *parent = nullptr);
-    ~ShareUserLine();
+    ~ShareUserLine() override;
 
     QSharedPointer<Share> share() const;
 
@@ -127,31 +136,73 @@ signals:
     void visualDeletionDone();
     void resizeRequested();
 
+public slots:
+    void slotStyleChanged();
+
+    void focusPasswordLineEdit();
+
 private slots:
     void on_deleteShareButton_clicked();
     void slotPermissionsChanged();
     void slotEditPermissionsChanged();
+    void slotPasswordCheckboxChanged();
     void slotDeleteAnimationFinished();
+
+    void refreshPasswordOptions();
+
+    void refreshPasswordLineEditPlaceholder();
+
+    void slotPasswordSet();
+    void slotPasswordSetError(int statusCode, const QString &message);
 
     void slotShareDeleted();
     void slotPermissionsSet();
 
     void slotAvatarLoaded(QImage avatar);
 
+    void setPasswordConfirmed();
+
+    void slotLineEditPasswordReturnPressed();
+
+    void slotConfirmPasswordClicked();
+
 private:
     void displayPermissions();
     void loadAvatar();
+    void setDefaultAvatar(int avatarSize);
+    void customizeStyle();
 
-    Ui::ShareUserLine *_ui;
-    QSharedPointer<Share> _share;
-    bool _isFile;
+    QPixmap pixmapForShareeType(Sharee::Type type, const QColor &backgroundColor = QColor()) const;
+    QColor backgroundColorForShareeType(Sharee::Type type) const;
 
-    // _permissionEdit is a checkbox
-    QAction *_permissionReshare;
-    QAction *_deleteShareButton;
-    QAction *_permissionCreate;
-    QAction *_permissionChange;
-    QAction *_permissionDelete;
+  void showNoteOptions(bool show);
+  void toggleNoteOptions(bool enable);
+  void onNoteConfirmButtonClicked();
+  void setNote(const QString &note);
+
+  void toggleExpireDateOptions(bool enable);
+  void showExpireDateOptions(bool show, const QDate &initialDate = QDate());
+  void setExpireDate();
+
+  void togglePasswordSetProgressAnimation(bool show);
+
+  void enableProgessIndicatorAnimation(bool enable);
+  void disableProgessIndicatorAnimation();
+
+  Ui::ShareUserLine *_ui;
+  AccountPtr _account;
+  QSharedPointer<UserGroupShare> _share;
+  bool _isFile;
+
+  // _permissionEdit is a checkbox
+  QAction *_permissionReshare;
+  QAction *_deleteShareButton;
+  QAction *_permissionCreate;
+  QAction *_permissionChange;
+  QAction *_permissionDelete;
+  QAction *_noteLinkAction;
+  QAction *_expirationDateLinkAction;
+  QAction *_passwordProtectLinkAction;
 };
 }
 

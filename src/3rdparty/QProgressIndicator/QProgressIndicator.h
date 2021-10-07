@@ -42,7 +42,7 @@ class QProgressIndicator : public QWidget
     Q_PROPERTY(bool displayedWhenStopped READ isDisplayedWhenStopped WRITE setDisplayedWhenStopped)
     Q_PROPERTY(QColor color READ color WRITE setColor)
 public:
-    QProgressIndicator(QWidget* parent = 0);
+    QProgressIndicator(QWidget* parent = nullptr);
 
     /*! Returns the delay between animation steps.
         \return The number of milliseconds between animation steps. By default, the animation delay is set to 40 milliseconds.
@@ -67,8 +67,8 @@ public:
       */
     const QColor & color() const { return m_color; }
 
-    virtual QSize sizeHint() const;
-    int heightForWidth(int w) const;
+    QSize sizeHint() const override;
+    int heightForWidth(int w) const override;
 public slots:
     /*! Starts the spin animation.
         \sa stopAnimation isAnimated
@@ -98,14 +98,14 @@ public slots:
      */
     void setColor(const QColor & color);
 protected:
-    virtual void timerEvent(QTimerEvent * event); 
-    virtual void paintEvent(QPaintEvent * event);
+    void timerEvent(QTimerEvent * event) override;
+    void paintEvent(QPaintEvent * event) override;
 private:
-    int m_angle;
-    int m_timerId;
-    int m_delay;
-    bool m_displayedWhenStopped;
-    QColor m_color;
+    int m_angle = 0;
+    int m_timerId = -1;
+    int m_delay = 40;
+    bool m_displayedWhenStopped = false;
+    QColor m_color = Qt::black;
 };
 
 #endif // QPROGRESSINDICATOR_H

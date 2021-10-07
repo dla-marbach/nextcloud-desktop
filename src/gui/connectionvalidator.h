@@ -60,30 +60,26 @@ namespace OCC {
   +---------------------------+
   |
   +-> checkServerCapabilities --------------v (in parallel)
-        JsonApiJob (cloud/capabilities)     JsonApiJob (ocs/v1.php/config)
-        |                                   +-> ocsConfigReceived
+        JsonApiJob (cloud/capabilities)
         +-> slotCapabilitiesRecieved -+
                                       |
     +---------------------------------+
     |
   fetchUser
-        PropfindJob
-        |
-        +-> slotUserFetched
-              AvatarJob
-              |
-              +-> slotAvatarImage -->
+        Utilizes the UserInfo class to fetch the user and avatar image
   +-----------------------------------+
   |
   +-> Client Side Encryption Checks --+ --reportResult()
     \endcode
  */
 
+class UserInfo;
+
 class ConnectionValidator : public QObject
 {
     Q_OBJECT
 public:
-    explicit ConnectionValidator(AccountPtr account, QObject *parent = nullptr);
+    explicit ConnectionValidator(AccountStatePtr accountState, QObject *parent = nullptr);
 
     enum Status {
         Undefined,
@@ -101,7 +97,7 @@ public:
     Q_ENUM(Status);
 
     // How often should the Application ask this object to check for the connection?
-    enum { DefaultCallingIntervalMsec = 32 * 1000 };
+    enum { DefaultCallingIntervalMsec = 62 * 1000 };
 
 public slots:
     /// Checks the server and the authentication.
@@ -125,17 +121,15 @@ protected slots:
     void slotAuthSuccess();
 
     void slotCapabilitiesRecieved(const QJsonDocument &);
-    void slotUserFetched(const QJsonDocument &);
-#ifndef TOKEN_AUTH_ONLY
-    void slotAvatarImage(const QImage &img);
-#endif
+    void slotUserFetched(UserInfo *userInfo);
 
 private:
+#ifndef TOKEN_AUTH_ONLY
     void reportConnected();
+#endif
     void reportResult(Status status);
     void checkServerCapabilities();
     void fetchUser();
-    static void ocsConfigReceived(const QJsonDocument &json, AccountPtr account);
 
     /** Sets the account's server version
      *
@@ -144,6 +138,7 @@ private:
     bool setAndCheckServerVersion(const QString &version);
 
     QStringList _errors;
+    AccountStatePtr _accountState;
     AccountPtr _account;
     bool _isCheckingServerAndAuth;
 };

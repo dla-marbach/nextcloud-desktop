@@ -37,6 +37,7 @@ SslButton::SslButton(QWidget *parent)
     _menu = new QMenu(this);
     QObject::connect(_menu, &QMenu::aboutToShow,
         this, &SslButton::slotUpdateMenu);
+    setMenu(_menu);
 }
 
 static QString addCertDetailsField(const QString &key, const QString &value)
@@ -140,16 +141,16 @@ QMenu *SslButton::buildCertMenu(QMenu *parent, const QSslCertificate &cert,
     }
 
     // create label first
-    QLabel *label = new QLabel(parent);
-    label->setStyleSheet(QLatin1String("QLabel { padding: 8px; background-color: #fff; }"));
+    auto *label = new QLabel(parent);
+    label->setStyleSheet(QLatin1String("QLabel { padding: 8px; }"));
     label->setTextFormat(Qt::RichText);
     label->setText(details);
 
     // plug label into widget action
-    QWidgetAction *action = new QWidgetAction(parent);
+    auto *action = new QWidgetAction(parent);
     action->setDefaultWidget(label);
     // plug action into menu
-    QMenu *menu = new QMenu(parent);
+    auto *menu = new QMenu(parent);
     menu->menuAction()->setText(txt);
     menu->addAction(action);
 
@@ -168,14 +169,12 @@ void SslButton::updateAccountState(AccountState *accountState)
 
     AccountPtr account = _accountState->account();
     if (account->url().scheme() == QLatin1String("https")) {
-        setIcon(QIcon(QLatin1String(":/client/resources/lock-https.png")));
+        setIcon(QIcon(QLatin1String(":/client/theme/lock-https.svg")));
         QSslCipher cipher = account->_sessionCipher;
         setToolTip(tr("This connection is encrypted using %1 bit %2.\n").arg(cipher.usedBits()).arg(cipher.name()));
-        setMenu(_menu);
     } else {
-        setIcon(QIcon(QLatin1String(":/client/resources/lock-http.png")));
+        setIcon(QIcon(QLatin1String(":/client/theme/lock-http.svg")));
         setToolTip(tr("This connection is NOT secure as it is not encrypted.\n"));
-        setMenu(nullptr);
     }
 }
 
@@ -188,6 +187,8 @@ void SslButton::slotUpdateMenu()
     }
 
     AccountPtr account = _accountState->account();
+
+    _menu->addAction(tr("Server version: %1").arg(account->serverVersion()))->setEnabled(false);
 
     if (account->isHttp2Supported()) {
         _menu->addAction("HTTP/2")->setEnabled(false);
@@ -239,6 +240,8 @@ void SslButton::slotUpdateMenu()
             _menu->addMenu(buildCertMenu(_menu, it.previous(), account->approvedCerts(), i, systemCerts));
             i++;
         }
+    } else {
+        _menu->addAction(tr("The connection is not secure"))->setEnabled(false);
     }
 }
 

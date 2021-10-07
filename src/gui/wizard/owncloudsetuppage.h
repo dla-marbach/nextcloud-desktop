@@ -43,7 +43,7 @@ class OwncloudSetupPage : public QWizardPage
     Q_OBJECT
 public:
     OwncloudSetupPage(QWidget *parent = nullptr);
-    ~OwncloudSetupPage();
+    ~OwncloudSetupPage() override;
 
     bool isComplete() const override;
     void initializePage() override;
@@ -62,14 +62,11 @@ public slots:
     void startSpinner();
     void stopSpinner();
     void slotCertificateAccepted();
+    void slotStyleChanged();
 
 protected slots:
     void slotUrlChanged(const QString &);
     void slotUrlEditFinished();
-#ifdef WITH_PROVIDERS
-    void slotLogin();
-    void slotGotoProviderList();
-#endif
 
     void setupCustomization();
 
@@ -77,22 +74,21 @@ signals:
     void determineAuthType(const QString &);
 
 private:
-    bool urlHasChanged();
+    void setLogo();
+    void customizeStyle();
+    void setupServerAddressDescriptionLabel();
 
     Ui_OwncloudSetupPage _ui;
 
     QString _oCUrl;
     QString _ocUser;
-    bool _authTypeKnown;
-    bool _checking;
-    bool _multipleFoldersExist;
-    DetermineAuthTypeJob::AuthType _authType;
+    bool _authTypeKnown = false;
+    bool _checking = false;
+    DetermineAuthTypeJob::AuthType _authType = DetermineAuthTypeJob::Basic;
 
     QProgressIndicator *_progressIndi;
-    QButtonGroup *_selectiveSyncButtons;
-    QString _remoteFolder;
-    AddCertificateDialog *addCertDial;
     OwncloudWizard *_ocWizard;
+    AddCertificateDialog *addCertDial = nullptr;
 };
 
 } // namespace OCC

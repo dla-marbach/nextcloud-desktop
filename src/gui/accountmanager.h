@@ -28,7 +28,7 @@ class AccountManager : public QObject
     Q_OBJECT
 public:
     static AccountManager *instance();
-    ~AccountManager() {}
+    ~AccountManager() override = default;
 
     /**
      * Saves the accounts to a given settings file
@@ -58,7 +58,7 @@ public:
      * Return a list of all accounts.
      * (this is a list of QSharedPointer for internal reasons, one should normally not keep a copy of them)
      */
-    QList<AccountStatePtr> accounts() { return _accounts; }
+    QList<AccountStatePtr> accounts() const;
 
     /**
      * Return the account state pointer for an account identified by its display name
@@ -70,12 +70,17 @@ public:
      */
     void deleteAccount(AccountState *account);
 
-
     /**
      * Creates an account and sets up some basic handlers.
      * Does *not* add the account to the account manager just yet.
      */
     static AccountPtr createAccount();
+
+    /**
+     * Returns the list of settings keys that can't be read because
+     * they are from the future.
+     */
+    static void backwardMigrationSettingsKeys(QStringList *deleteKeys, QStringList *ignoreKeys);
 
 private:
     // saving and loading Account to settings
@@ -89,6 +94,11 @@ private:
 
     // Adds an account to the tracked list, emitting accountAdded()
     void addAccountState(AccountState *accountState);
+
+    AccountManager() = default;
+    QList<AccountStatePtr> _accounts;
+    /// Account ids from settings that weren't read
+    QSet<QString> _additionalBlockedAccountIds;
 
 public slots:
     /// Saves account data, not including the credentials
@@ -104,9 +114,7 @@ public slots:
 Q_SIGNALS:
     void accountAdded(AccountState *account);
     void accountRemoved(AccountState *account);
-
-private:
-    AccountManager() {}
-    QList<AccountStatePtr> _accounts;
+    void accountSyncConnectionRemoved(AccountState *account);
+    void removeAccountFolders(AccountState *account);
 };
 }

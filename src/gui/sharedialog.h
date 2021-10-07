@@ -51,7 +51,7 @@ public:
         const QByteArray &numericFileId,
         ShareDialogStartPage startPage,
         QWidget *parent = nullptr);
-    ~ShareDialog();
+    ~ShareDialog() override;
 
 private slots:
     void done(int r) override;
@@ -64,14 +64,21 @@ private slots:
     void slotAddLinkShareWidget(const QSharedPointer<LinkShare> &linkShare);
     void slotDeleteShare();
     void slotCreateLinkShare();
+    void slotCreatePasswordForLinkShare(const QString &password);
+    void slotCreatePasswordForLinkShareProcessed();
+    void slotLinkShareRequiresPassword();
     void slotAdjustScrollWidgetSize();
 
 signals:
-    void toggleAnimation(bool);
+    void toggleShareLinkAnimation(bool start);
+    void styleChanged();
+
+protected:
+    void changeEvent(QEvent *) override;
 
 private:
     void showSharingUi();
-    void addLinkShareWidget(const QSharedPointer<LinkShare> &linkShare);
+    ShareLinkWidget *addLinkShareWidget(const QSharedPointer<LinkShare> &linkShare);
     void initLinkShareWidget();
 
     Ui::ShareDialog *_ui;
@@ -83,13 +90,14 @@ private:
     QByteArray _numericFileId;
     QString _privateLinkUrl;
     ShareDialogStartPage _startPage;
-    ShareManager *_manager;
+    ShareManager *_manager = nullptr;
 
     QList<ShareLinkWidget*> _linkWidgetList;
-    ShareLinkWidget* _emptyShareLinkWidget;
-    ShareUserGroupWidget *_userGroupWidget;
-    QProgressIndicator *_progressIndicator;
+    ShareLinkWidget* _emptyShareLinkWidget = nullptr;
+    ShareUserGroupWidget *_userGroupWidget = nullptr;
+    QProgressIndicator *_progressIndicator = nullptr;
 };
-}
+
+} // namespace OCC
 
 #endif // SHAREDIALOG_H

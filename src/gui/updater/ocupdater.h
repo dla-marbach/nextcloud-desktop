@@ -97,13 +97,20 @@ public:
         DownloadFailed,
         DownloadTimedOut,
         UpdateOnlyAvailableThroughSystem };
+
+    enum UpdateStatusStringFormat {
+        PlainText,
+        Html,
+    };
     explicit OCUpdater(const QUrl &url);
+
+    void setUpdateUrl(const QUrl &url);
 
     bool performUpdate();
 
     void checkForUpdate() override;
 
-    QString statusString() const;
+    QString statusString(UpdateStatusStringFormat format = PlainText) const;
     int downloadState() const;
     void setDownloadState(DownloadState state);
 
@@ -113,13 +120,14 @@ signals:
     void requestRestart();
 
 public slots:
+    // FIXME Maybe this should be in the NSISUpdater which should have been called WindowsUpdater
     void slotStartInstaller();
 
 protected slots:
     void backgroundCheckForUpdate() override;
+    void slotOpenUpdateUrl();
 
 private slots:
-    void slotOpenUpdateUrl();
     void slotVersionInfoArrived();
     void slotTimedOut();
 
@@ -145,9 +153,6 @@ class NSISUpdater : public OCUpdater
 {
     Q_OBJECT
 public:
-    enum UpdateState { NoUpdate = 0,
-        UpdateAvailable,
-        UpdateFailed };
     explicit NSISUpdater(const QUrl &url);
     bool handleStartup() override;
 private slots:
@@ -156,12 +161,12 @@ private slots:
     void slotWriteFile();
 
 private:
-    NSISUpdater::UpdateState updateStateOnStart();
-    void showDialog(const UpdateInfo &info);
+    void wipeUpdateData();
+    void showNoUrlDialog(const UpdateInfo &info);
+    void showUpdateErrorDialog(const QString &targetVersion);
     void versionInfoArrived(const UpdateInfo &info) override;
     QScopedPointer<QTemporaryFile> _file;
     QString _targetFile;
-    bool _showFallbackMessage;
 };
 
 /**

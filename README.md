@@ -4,7 +4,7 @@ The :computer: Nextcloud Desktop Client is a tool to synchronize files from Next
 with your computer.
 
 <p align="center">
-    <img src="https://nextcloud.com/wp-content/themes/next/assets/img/clients/desktop/macsettings.png?x16328" alt="Desktop Client on Mac OS]">
+    <img src="doc/images/main_dialog_christine.png" alt="Desktop Client on Windows" width="450">
 </p>
 
 ## :blue_heart: :tada: Contributing
@@ -33,14 +33,14 @@ $ cd build
 ##### Linux & Mac OS
 
 ```
-$ cmake .. -DCMAKE_INSTALL_PREFIX=~/nextcloud-desktop-client -DCMAKE_BUILD_TYPE=Debug -DNO_SHIBBOLETH=1
+$ cmake .. -DCMAKE_INSTALL_PREFIX=~/nextcloud-desktop-client -DCMAKE_BUILD_TYPE=Debug
 $ make install
 ```
 
 ##### Windows
 
 ```
-$ cmake -G "Visual Studio 15 2017 Win64" .. -DCMAKE_INSTALL_PREFIX=$USERPROFILE\nextcloud-desktop-client -DCMAKE_BUILD_TYPE=Debug -DNO_SHIBBOLETH=1
+$ cmake -G "Visual Studio 15 2017 Win64" .. -DCMAKE_INSTALL_PREFIX=$USERPROFILE\nextcloud-desktop-client -DCMAKE_BUILD_TYPE=Debug
 $ cmake --build . --config Debug --target install
 ```
 
@@ -61,14 +61,14 @@ For more info: [Wiki/Daily Builds](https://github.com/nextcloud/desktop/wiki/Dai
 ### :bomb: Reporting issues
 
 - If you find any bugs or have any suggestion for improvement, please
-file an issue at https://github.com/nextcloud/client/issues. Do not
+file an issue at https://github.com/nextcloud/desktop/issues. Do not
 contact the authors directly by mail, as this increases the chance
 of your report being lost. :boom:
 
 ### :smiley: :trophy: Pull requests
 
 - If you created a patch :heart_eyes:, please submit a [Pull
-Request](https://github.com/nextcloud/client/pulls).
+Request](https://github.com/nextcloud/desktop/pulls).
 - How to create a pull request? This guide will help you get started: [Opening a pull request](https://opensource.guide/how-to-contribute/#opening-a-pull-request) :heart:
 
 

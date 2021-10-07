@@ -19,6 +19,8 @@
 #include <QStyle>
 #include <QStyleHints>
 
+#define HASQT5_11 (QT_VERSION >= QT_VERSION_CHECK(5,11,0))
+
 namespace OCC {
 
 static const int Spacing = 6;
@@ -88,14 +90,21 @@ QSize SlideShow::sizeHint() const
     QFontMetrics fm = fontMetrics();
     QSize labelSize(0, fm.height());
     for (const QString &label : _labels) {
+#if (HASQT5_11)
+        labelSize.setWidth(std::max(fm.horizontalAdvance(label), labelSize.width()));
+#else
         labelSize.setWidth(std::max(fm.width(label), labelSize.width()));
+#endif
     }
     QSize pixmapSize;
     for (const QPixmap &pixmap : _pixmaps) {
         pixmapSize.setWidth(std::max(pixmap.width(), pixmapSize.width()));
         pixmapSize.setHeight(std::max(pixmap.height(), pixmapSize.height()));
     }
-    return QSize(std::max(labelSize.width(), pixmapSize.width()), labelSize.height() + Spacing + pixmapSize.height());
+    return {
+        std::max(labelSize.width(), pixmapSize.width()),
+        labelSize.height() + Spacing + pixmapSize.height()
+    };
 }
 
 void SlideShow::startShow(int interval)
@@ -116,7 +125,7 @@ void SlideShow::nextSlide()
     _reverse = false;
 }
 
-void SlideShow::previousSlide()
+void SlideShow::prevSlide()
 {
     setCurrentSlide((_currentIndex > 0 ? _currentIndex : _labels.count()) - 1);
     _reverse = true;
