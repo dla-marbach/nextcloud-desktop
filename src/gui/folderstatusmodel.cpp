@@ -142,14 +142,14 @@ QVariant FolderStatusModel::data(const QModelIndex &index, int role) const
 
     switch (classify(index)) {
     case AddButton: {
-        if (role == FolderStatusDelegate::AddButton) {
-            return QVariant(true);
-        } else if (role == Qt::ToolTipRole) {
-            if (!_accountState->isConnected()) {
-                return tr("You need to be connected to add a folder");
-            }
-            return tr("Click this button to add a folder to synchronize.");
-        }
+        //if (role == FolderStatusDelegate::AddButton) {
+        //    return QVariant(true);
+        //} else if (role == Qt::ToolTipRole) {
+        //    if (!_accountState->isConnected()) {
+        //        return tr("You need to be connected to add a folder");
+        //    }
+        //    return tr("Click this button to add a folder to synchronize.");
+        //}
         return QVariant();
     }
     case SubFolder: {
