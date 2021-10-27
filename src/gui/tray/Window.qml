@@ -194,50 +194,7 @@ Window {
                                 onObjectRemoved: accountMenu.removeItem(object)
                             }
 
-                            MenuItem {
-                                id: addAccountButton
-                                height: Style.addAccountButtonHeight
-                                hoverEnabled: true
-
-                                background: Item {
-                                    height: parent.height
-                                    width: parent.menu.width
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        anchors.margins: 1
-                                        color: parent.parent.hovered ? Style.lightHover : "transparent"
-                                    }
-                                }
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    spacing: 0
-
-                                    Image {
-                                        Layout.leftMargin: 12
-                                        verticalAlignment: Qt.AlignCenter
-                                        source: "qrc:///client/theme/black/add.svg"
-                                        sourceSize.width: Style.headerButtonIconSize
-                                        sourceSize.height: Style.headerButtonIconSize
-                                    }
-                                    Label {
-                                        Layout.leftMargin: 14
-                                        text: qsTr("Add account")
-                                        color: "black"
-                                        font.pixelSize: Style.topLinePixelSize
-                                    }
-                                    // Filler on the right
-                                    Item {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                    }
-                                }
-                                onClicked: UserModel.addAccount()
-
-                                Accessible.role: Accessible.MenuItem
-                                Accessible.name: qsTr("Add new account")
-                                Accessible.onPressAction: addAccountButton.clicked()
-                            }
+                            
 
                             MenuSeparator {
                                 contentItem: Rectangle {
