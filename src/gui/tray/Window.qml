@@ -22,14 +22,7 @@ Window {
     flags:      Systray.useNormalWindow ? Qt.Window : Qt.Dialog | Qt.FramelessWindowHint
 
 
-    property var fileActivityDialogAbsolutePath: ""
     readonly property int maxMenuHeight: Style.trayWindowHeight - Style.trayWindowHeaderHeight - 2 * Style.trayWindowBorderWidth
-
-    function openFileActivityDialog(displayPath, absolutePath) {
-        fileActivityDialogLoader.displayPath = displayPath
-        fileActivityDialogLoader.absolutePath = absolutePath
-        fileActivityDialogLoader.refresh()
-    }
 
     Component.onCompleted: Systray.forceWindowInit(trayWindow)
 
@@ -54,14 +47,14 @@ Window {
 
     Connections {
         target: UserModel
-        function onNewUserSelected() {
+        onNewUserSelected: {
             accountMenu.close();
         }
     }
 
     Connections {
         target: Systray
-        function onShowWindow() {
+        onShowWindow: {
             accountMenu.close();
             appsMenu.close();
             Systray.positionWindow(trayWindow);
@@ -73,13 +66,9 @@ Window {
             Systray.setOpened();
             UserModel.fetchCurrentActivityModel();
         }
-        function onHideWindow() {
+        onHideWindow: {
             trayWindow.hide();
             Systray.setClosed();
-        }
-
-        function onShowFileActivityDialog(displayPath, absolutePath) {
-            openFileActivityDialog(displayPath, absolutePath)
         }
     }
 
@@ -151,10 +140,6 @@ Window {
                             }
                         }
 
-                        Loader {
-                            id: userStatusSelectorDialogLoader
-                        }
-
                         Menu {
                             id: accountMenu
 
@@ -182,19 +167,55 @@ Window {
                             Instantiator {
                                 id: userLineInstantiator
                                 model: UserModel
-                                delegate: UserLine {
-                                    onShowUserStatusSelectorDialog: {
-                                        userStatusSelectorDialogLoader.source = "qrc:/qml/src/gui/UserStatusSelectorDialog.qml"
-                                        userStatusSelectorDialogLoader.item.title = qsTr("Set user status")
-                                        userStatusSelectorDialogLoader.item.model.load(index)
-                                        userStatusSelectorDialogLoader.item.show()
-                                    }
-                                }
+                                delegate: UserLine {}
                                 onObjectAdded: accountMenu.insertItem(index, object)
                                 onObjectRemoved: accountMenu.removeItem(object)
                             }
 
-                            
+                            MenuItem {
+                                id: addAccountButton
+                                height: Style.addAccountButtonHeight
+                                hoverEnabled: true
+
+                                background: Item {
+                                    height: parent.height
+                                    width: parent.menu.width
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        color: parent.parent.hovered ? Style.lightHover : "transparent"
+                                    }
+                                }
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 0
+
+                                    Image {
+                                        Layout.leftMargin: 12
+                                        verticalAlignment: Qt.AlignCenter
+                                        source: "qrc:///client/theme/black/add.svg"
+                                        sourceSize.width: Style.headerButtonIconSize
+                                        sourceSize.height: Style.headerButtonIconSize
+                                    }
+                                    Label {
+                                        Layout.leftMargin: 14
+                                        text: qsTr("Add account")
+                                        color: "black"
+                                        font.pixelSize: Style.topLinePixelSize
+                                    }
+                                    // Filler on the right
+                                    Item {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                    }
+                                }
+                                //onClicked: UserModel.addAccount()
+
+                                Accessible.role: Accessible.MenuItem
+                                Accessible.name: qsTr("Add new account")
+                                Accessible.onPressAction: addAccountButton.clicked()
+                            }
 
                             MenuSeparator {
                                 contentItem: Rectangle {
@@ -487,10 +508,12 @@ Window {
                     Accessible.name: qsTr("More apps")
                     Accessible.onPressAction: trayWindowAppsButton.clicked()
 
-                    AutoSizingMenu {
+                    Menu {
                         id: appsMenu
                         y: (trayWindowAppsButton.y + trayWindowAppsButton.height + 2)
                         readonly property Item listContentItem: contentItem.contentItem
+                        width: Math.min(listContentItem.childrenRect.width + 4, Style.trayWindowWidth / 2)
+                        height: Math.min(implicitHeight, maxMenuHeight)
                         closePolicy: Menu.CloseOnPressOutsideParent | Menu.CloseOnEscape
 
                         background: Rectangle {
@@ -508,8 +531,23 @@ Window {
                                 text: appName
                                 font.pixelSize: Style.topLinePixelSize
                                 icon.source: appIconUrl
+                                width: contentItem.implicitWidth + leftPadding + rightPadding
                                 onTriggered: UserAppsModel.openAppUrl(appUrl)
                                 hoverEnabled: true
+
+                                background: Item {
+                                    width: appsMenu.width
+                                    height: parent.height
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        color: appEntry.hovered ? Style.lightHover : "transparent"
+                                    }
+                                    
+                                    Accessible.role: Accessible.PopupMenu
+                                    Accessible.name: qsTr("Apps menu")
+                                }
 
                                 Accessible.role: Accessible.MenuItem
                                 Accessible.name: qsTr("Open %1 in browser").arg(appName)
@@ -521,40 +559,31 @@ Window {
             }
         }   // Rectangle trayWindowHeaderBackground
 
-       ActivityList {
-           anchors.top: trayWindowHeaderBackground.bottom
-           anchors.left: trayWindowBackground.left
-           anchors.right: trayWindowBackground.right
-           anchors.bottom: trayWindowBackground.bottom
-           
-           model: activityModel
-           onShowFileActivity: {
-               openFileActivityDialog(displayPath, absolutePath)
-           }
-           onActivityItemClicked: {
-               model.triggerDefaultAction(index)
-           }
-       }
-
-        Loader {
-            id: fileActivityDialogLoader
-
-            property string displayPath: ""
-            property string absolutePath: ""
-
-            function refresh() {
-                active = true
-                item.model.load(activityModel.accountState, absolutePath)
-                item.show()            
+        ListView {
+            id: activityListView
+            anchors.top: trayWindowHeaderBackground.bottom
+            anchors.left: trayWindowBackground.left
+            anchors.right: trayWindowBackground.right
+            anchors.bottom: trayWindowBackground.bottom
+            clip: true
+            ScrollBar.vertical: ScrollBar {
+                id: listViewScrollbar
             }
 
-            active: false
-            sourceComponent: FileActivityDialog {
-                title: qsTr("%1 - File activity").arg(fileActivityDialogLoader.displayPath)
-                onClosing: fileActivityDialogLoader.active = false
-            }
+            readonly property int maxActionButtons: 2
 
-            onLoaded: refresh()
+            keyNavigationEnabled: true
+
+            Accessible.role: Accessible.List
+            Accessible.name: qsTr("Activity list")
+
+            model: activityModel
+
+            delegate: ActivityItem {  
+                width: activityListView.width
+                height: Style.trayWindowHeaderHeight
+                onClicked: activityModel.triggerDefaultAction(model.index)
+            }
         }
-    } // Rectangle trayWindowBackground
+    }       // Rectangle trayWindowBackground
 }
