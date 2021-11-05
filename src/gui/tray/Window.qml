@@ -210,7 +210,7 @@ Window {
                                         Layout.fillHeight: true
                                     }
                                 }
-                                onClicked: UserModel.addAccount()
+                                //onClicked: UserModel.addAccount()
 
                                 Accessible.role: Accessible.MenuItem
                                 Accessible.name: qsTr("Add new account")
