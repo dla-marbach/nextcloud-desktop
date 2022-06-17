@@ -113,8 +113,8 @@ Systray::Systray()
 
     connect(UserModel::instance(), &UserModel::newUserSelected,
         this, &Systray::slotNewUserSelected);
-    connect(UserModel::instance(), &UserModel::addAccount,
-            this, &Systray::openAccountWizard);
+    //connect(UserModel::instance(), &UserModel::addAccount,
+    //        this, &Systray::openAccountWizard);
 
     connect(AccountManager::instance(), &AccountManager::accountAdded,
         this, &Systray::showWindow);
@@ -152,7 +152,7 @@ void Systray::setupContextMenu()
     _contextMenu = new QMenu();
 
     if (AccountManager::instance()->accounts().isEmpty()) {
-        _contextMenu->addAction(tr("Add account"), this, &Systray::openAccountWizard);
+        //_contextMenu->addAction(tr("Add account"), this, &Systray::openAccountWizard);
     } else {
         _contextMenu->addAction(tr("Open main dialog"), this, &Systray::openMainDialog);
     }
